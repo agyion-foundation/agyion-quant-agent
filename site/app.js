@@ -231,8 +231,8 @@
   $("newsBody").textContent = D.newsletter.lines.join("\n");
 
   /* ---------------- subscribe form (Supabase REST, anon insert-only) ---------------- */
-  var SUB_URL = "https://qpsthoardxlwvqbippoo.supabase.co/rest/v1/subscribers";
-  var SUB_KEY = "sb_publishable_YboIulLJgcSAjuPRInotmQ_XDZNMgyp";
+  var SUB_URL = "/api/subscribe";
+  var SUB_KEY = "";
   var subForm = $("subForm");
   if (subForm) {
     subForm.addEventListener("submit", function (ev) {

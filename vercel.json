@@ -1,1 +1,4 @@
-{"version":2,"public":false,"buildCommand":null,"outputDirectory":"site"}
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2
+}

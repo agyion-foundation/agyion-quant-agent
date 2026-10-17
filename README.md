@@ -64,3 +64,9 @@ The agent is designed to list on OKX.ai as an ASP (Agent Service Provider): the 
 ---
 
 *Agyion Labs · Avalanche Fuji testnet · [agyionlabs.dev](https://agyionlabs.dev)*
+
+## Newsletter backend (Vercel serverless)
+
+- `api/subscribe.js` — POST email → Supabase subscribers; optional Resend welcome email.
+- `api/send-brief.js` — daily 23:15 TRT trigger (any cron + `?secret=`) → Resend batch to all active subscribers.
+- Env: `SUPABASE_SERVICE_KEY`, `RESEND_API_KEY`, `RESEND_FROM`, `CRON_SECRET` (Vercel project settings).
