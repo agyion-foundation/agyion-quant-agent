@@ -1,1 +1,260 @@
-test
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AGYION QUANT — Signal Broadcast · P100</title>
+<meta name="description" content="Agyion Quant Agent — autonomous on-chain signal engine. Live composite gauge, index family, vault security model, ATK execution proof.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=VT323&family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- phosphor / scanline overlay -->
+<div class="crt" aria-hidden="true"></div>
+
+<!-- ============ TELETEXT MASTHEAD ============ -->
+<header class="masthead">
+  <div class="mast-row">
+    <span class="mast-brand"><span class="mosaic" aria-hidden="true">▛▚▞</span> AGYION<span class="mast-dim">·</span>QUANT</span>
+    <span class="mast-page">P100</span>
+    <span class="mast-live" id="liveBadge"><span class="live-dot"></span>LIVE</span>
+    <span class="mast-clock" id="clock">--:--:--</span>
+  </div>
+  <div class="mast-sub">
+    <span>ON-CHAIN SIGNAL BROADCAST</span>
+    <span class="mast-dim">SNAPSHOT <span id="snapTs">…</span> · WEIGHTS v1</span>
+  </div>
+</header>
+
+<!-- ============ TICKER TAPE ============ -->
+<div class="ticker-wrap" aria-hidden="true">
+  <div class="ticker" id="ticker"></div>
+</div>
+
+<!-- ============ P100 · HERO GAUGE ============ -->
+<main>
+<section class="page" id="p100">
+  <div class="page-tag">P100 — COMPOSITE SIGNAL</div>
+
+  <div class="hero-grid">
+    <div class="hero-copy">
+      <h1 class="hero-title">THE MARKET,<br>REDUCED TO<br><span class="amber">ONE NEEDLE.</span></h1>
+      <p class="hero-sub">Twenty-seven weighted on-chain &amp; macro components, three index
+      layers, one composite in <span class="mono">[-1, +1]</span>. Computed by an autonomous
+      agent. Executed through OKX ATK. Custodied by an Avalanche vault the agent
+      <em>cannot</em> steal from.</p>
+      <div class="hero-rule mono" id="signalRule"></div>
+    </div>
+
+    <div class="gauge-stage">
+      <svg id="gauge" viewBox="0 0 400 250" role="img" aria-label="Composite signal gauge">
+        <!-- band arcs drawn by JS -->
+        <g id="bands"></g>
+        <!-- ticks -->
+        <g id="ticks"></g>
+        <!-- needle -->
+        <g id="needleG">
+          <line id="needle" x1="200" y1="210" x2="200" y2="52" />
+          <circle cx="200" cy="210" r="9" class="hub"/>
+          <circle cx="200" cy="210" r="3.5" class="hub-in"/>
+        </g>
+        <text x="58"  y="238" class="g-lab g-sell">SELL</text>
+        <text x="200" y="30"  class="g-lab g-neut" text-anchor="middle">NEUTRAL</text>
+        <text x="342" y="238" class="g-lab g-buy" text-anchor="end">BUY</text>
+        <text x="200" y="246" class="g-val" id="gaugeVal" text-anchor="middle">+0.0000</text>
+      </svg>
+      <div class="gauge-readout">
+        <span class="ro-label">COMPOSITE</span>
+        <span class="ro-value mono" id="heroValue">+0.0043</span>
+        <span class="ro-signal neutral" id="heroSignal">NEUTRAL</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="band-strip mono" aria-label="Signal bands">
+    <span class="bs sell">◀ −1.00 … −0.50&nbsp;&nbsp;SELL</span>
+    <span class="bs neut active">−0.50 … +0.50&nbsp;&nbsp;NEUTRAL</span>
+    <span class="bs buy">+0.50 … +1.00&nbsp;&nbsp;BUY ▶</span>
+  </div>
+</section>
+
+<!-- ============ SUBSCRIBE CTA ============ -->
+<section class="page subscribe" id="subscribe">
+  <div class="sub-grid">
+    <div class="sub-copy">
+      <div class="page-tag">DAILY BRIEF — 23:15 TRT</div>
+      <h2 class="sub-title">The needle moves.<br><span class="amber">Your inbox knows first.</span></h2>
+      <p class="sec-sub">One email, every night at 23:15 TRT: composite signal, all three indices,
+      and the agent's reasoning — before the next session opens.</p>
+    </div>
+    <form class="sub-form" id="subForm" novalidate>
+      <label class="sub-label mono" for="subEmail">SUBSCRIBE TO THE DAILY BRIEF</label>
+      <div class="sub-row">
+        <input class="sub-input mono" id="subEmail" type="email" name="email"
+               placeholder="you@domain.com" autocomplete="email" required>
+        <button class="sub-btn mono" id="subBtn" type="submit">TRANSMIT ▸</button>
+      </div>
+      <div class="sub-msg mono" id="subMsg" role="status" aria-live="polite"></div>
+    </form>
+  </div>
+</section>
+
+<!-- ============ P200 · INDEX FAMILY ============ -->
+<section class="page" id="p200">
+  <div class="page-tag">P200 — INDEX FAMILY</div>
+  <h2 class="sec-title">Three clocks, <span class="amber">one machine.</span></h2>
+
+  <div class="family" id="familyCards">
+    <!-- cards injected by app.js -->
+  </div>
+
+  <details class="drill">
+    <summary class="mono">▸ DRILL DOWN — all 27 components, raw · score · weight · impact</summary>
+    <div id="drillBody"></div>
+  </details>
+</section>
+
+<!-- ============ P300 · WHAT THE AGENT DID ============ -->
+<section class="page" id="p300">
+  <div class="page-tag">P300 — WHAT THE AGENT DID</div>
+  <h2 class="sec-title">Decision log, <span class="amber">unedited.</span></h2>
+  <p class="sec-sub">Last 5 records from <span class="mono dim">vault/logs/agent_decisions.jsonl</span> +
+  <span class="mono dim">atk/logs/decisions.jsonl</span> — embedded verbatim.</p>
+  <div class="term" id="decisionLog">
+    <!-- log lines injected -->
+  </div>
+</section>
+
+<!-- ============ P400 · VAULT ============ -->
+<section class="page" id="p400">
+  <div class="page-tag">P400 — VAULT SECURITY MODEL</div>
+  <h2 class="sec-title">The agent proposes.<br><span class="amber">It can never withdraw.</span></h2>
+
+  <div class="vault-grid">
+    <div class="vault-rules">
+      <div class="vr"><span class="vr-k mono">RULE 01</span> Agent key can only call whitelisted targets × whitelisted function selectors. Everything else reverts.</div>
+      <div class="vr"><span class="vr-k mono">RULE 02</span> Agent can never call the asset contract directly, and <span class="mono">withdraw()</span> from the agent key reverts — <span class="mono dim">"insufficient shares"</span>.</div>
+      <div class="vr"><span class="vr-k mono">RULE 03</span> Daily movement limit, enforced both per-tx and cumulatively. Breach → <span class="mono dim">"daily limit exceeded"</span>.</div>
+      <div class="vr"><span class="vr-k mono">RULE 04</span> Deposits &amp; withdrawals stay permissionless for users — the cage is around the agent, not the money.</div>
+      <div class="vr"><span class="vr-k mono">RULE 05</span> Signal → exposure mapping is deterministic: logistic(k=4.0) with Schmitt hysteresis (enter ±0.50, exit ±0.40). Same input, same proposal, every time.</div>
+      <div class="vr"><span class="vr-k mono">RULE 06</span> Trades are queued behind a 900s timelock — the guardian can veto before execution. Proven live: see the E2E tx below.</div>
+    </div>
+
+    <div class="vault-status">
+      <div class="vs-row"><span class="dim">CONTRACT</span><span class="mono" id="vaultName"></span></div>
+      <div class="vs-row"><span class="dim">NETWORK</span><span class="mono" id="vaultNet"></span></div>
+      <div class="vs-row"><span class="dim">ADDRESS</span>
+        <span class="mono" id="vaultAddr">…</span>
+      </div>
+      <div class="vs-row"><span class="dim">TIMELOCK</span><span class="mono" id="vaultTimelock">…</span></div>
+      <div class="vs-row"><span class="dim">TVL (DEPOSIT)</span><span class="mono" id="vaultDeposit">…</span></div>
+      <div class="vs-badge" id="testBadge">
+        <span class="vs-big mono">19/19</span>
+        <span class="vs-small">security tests passing<br>revert paths verified on-chain semantics</span>
+      </div>
+      <div class="vs-note mono" id="snowtraceNote"></div>
+      <div class="vs-note mono" id="e2eNote"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ P500 · ATK PROOF ============ -->
+<section class="page" id="p500">
+  <div class="page-tag">P500 — ATK EXECUTION PROOF</div>
+  <h2 class="sec-title">Real MCP. <span class="amber">Real OKX price.</span></h2>
+
+  <div class="atk-grid">
+    <div class="atk-stat"><span class="as-num mono" id="atkTools">50</span><span class="as-lab">tools exposed by<br>okx-trade-mcp 1.4.8<br><span class="dim">modules: market · spot · account</span></span></div>
+    <div class="atk-stat"><span class="as-num mono amber">0.033%</span><span class="as-lab">live price cross-check<br>ATK 81,479.2 vs engine 81,506.0<br><span class="dim">tolerance 2% — PASS</span></span></div>
+    <div class="atk-stat"><span class="as-num mono">4</span><span class="as-lab">tools called over MCP stdio<br>ticker · place_order<br>positions · balance</span></div>
+  </div>
+
+  <div class="term atk-flow mono" aria-label="ATK flow">
+    <div class="tf-line dim">engine ──▶ snapshot.json ──▶ signal_to_trade.py ──▶ AtkBridge ──▶ npx @okx_ai/okx-trade-mcp</div>
+    <div class="tf-line">composite &gt; +0.5 → BUY plan · composite &lt; −0.5 → SELL plan · else NEUTRAL (no order)</div>
+    <div class="tf-line">tools/call market_get_ticker BTC-USDT ──▶ <span class="buy-t">✔ real price over MCP transport</span> · auth calls fail closed (AUTH_MISSING, expected in keyless sandbox)</div>
+    <div class="tf-line dim">fallback chain: MCP → OKX V5 REST (HMAC, x-simulated-trading) → mock (marked simulated:true)</div>
+  </div>
+</section>
+
+<!-- ============ P600 · NEWSLETTER ============ -->
+<section class="page" id="p600">
+  <div class="page-tag">P600 — DAILY NEWSLETTER</div>
+  <h2 class="sec-title">Every morning, <span class="amber">a printout.</span></h2>
+  <div class="news-wrap">
+    <div class="news-sheet" id="newsSheet">
+      <div class="ns-head mono" id="newsTitle"></div>
+      <pre class="ns-body mono" id="newsBody"></pre>
+      <div class="ns-foot dim mono">… plus full component tables for all three layers. Delivered daily to Signal Pro subscribers.</div>
+    </div>
+    <div class="news-side">
+      <p>The agent writes what it measured — not what it feels. Each issue is generated from the same
+      <span class="mono dim">snapshot.json</span> that drives the gauge on P100.</p>
+      <p class="dim">Sample above is the real header of <span class="mono">newsletter-2026-10-17.md</span>.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ P700 · PRICING ============ -->
+<section class="page" id="p700">
+  <div class="page-tag">P700 — PRICING</div>
+  <h2 class="sec-title">Pay for signal. <span class="amber">Or pay for outcome.</span></h2>
+
+  <div class="price-table mono">
+    <div class="pt-row pt-head"><span>TIER</span><span>PRICE</span><span>WHAT YOU GET</span></div>
+    <div class="pt-row"><span class="pt-name">FREE</span><span>$0</span><span>Live gauge (P100) + weekly summary</span></div>
+    <div class="pt-row pt-hot"><span class="pt-name">SIGNAL PRO</span><span class="amber">$50/mo</span><span>Daily newsletter + full 27-component drill-down</span></div>
+    <div class="pt-row"><span class="pt-name">AUTO-VAULT</span><span class="buy-t">10% perf</span><span>Agent-managed exposure, high-water mark, you keep the keys</span></div>
+  </div>
+  <p class="sec-sub dim">Benchmarks: Alpha Factory $49 · Telegram signal groups $42–290 · Enzyme 0–20% · Bybit copy-trading 10–15%.</p>
+</section>
+
+<!-- ============ P800 · JURY EVIDENCE ============ -->
+<section class="page" id="p800">
+  <div class="page-tag">P800 — JURY EVIDENCE</div>
+  <h2 class="sec-title">Receipts, <span class="amber">not slides.</span></h2>
+
+  <div class="evi-grid">
+    <div class="evi">
+      <div class="evi-track mono">TRACK — OKX (10%)</div>
+      <ul>
+        <li>ATK integration proof — real MCP stdio session, 50 tools listed, live BTC ticker, signed order intent: <span class="mono dim">quant-agent/atk/INTEGRATION_PROOF.md</span></li>
+        <li>Execution log (JSON-RPC transcripts, transport flagged per call): <span class="mono dim">quant-agent/atk/logs/decisions.jsonl · demo_log.json</span></li>
+        <li>Price cross-check 0.033% deviation vs independent engine source (CryptoQuant)</li>
+      </ul>
+    </div>
+    <div class="evi">
+      <div class="evi-track mono">TRACK — AVALANCHE (10%)</div>
+      <ul>
+        <li>QuantVault.sol — agent-caged custody, 19/19 security tests: <span class="mono dim">quant-agent/vault/tests/last_results.json</span></li>
+        <li id="snowtraceLine">Snowtrace (Fuji) contract: <a class="mono evi-link" href="https://testnet.snowtrace.io/address/0xd4D6fAcC84fC230b605522Bd21b9f2E82A01Fa50">0xd4D6…Fa50 ▸</a> — deployed 2026-10-17, timelock 900s, 2,000 tUSDC deposited</li>
+        <li>E2E trade executed on-chain: <a class="mono evi-link" href="https://testnet.snowtrace.io/tx/0x7a98e1ba648dde950afa53d44c62f2f91e043a28874af1b0a9e3af6e46e2760c">executeTrade tx 0x7a98…760c ▸</a> (queue → timelock → execute)</li>
+        <li>Deterministic proposals on file: <span class="mono dim">vault/proposals/proposal_20261017T142704Z-be3a2a.json</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ============ FOOTER ============ -->
+<footer class="foot">
+  <div class="foot-row">
+    <span class="foot-brand">AGYION LABS</span>
+    <span class="dim mono">quant signal engine · OKX ATK execution · avalanche vault</span>
+    <span class="mono dim">P100–P800 · end of transmission ■</span>
+  </div>
+</footer>
+
+<!-- bottom ticker -->
+<div class="ticker-wrap bottom" aria-hidden="true">
+  <div class="ticker rev" id="ticker2"></div>
+</div>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

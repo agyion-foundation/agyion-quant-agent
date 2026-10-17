@@ -1,1 +1,438 @@
-x
+{
+  "version": "0.1",
+  "generated_at": "2026-10-17T14:55:27+00:00",
+  "long_term_index": 0.0767,
+  "short_term_index": 0.0032,
+  "regime_index": -0.6035,
+  "weights_version": "v1",
+  "policy": "POLICY.md v1",
+  "signal": "NÖTR",
+  "signal_prev": "NÖTR",
+  "signal_rule": "Schmitt hysteresis (POLICY.md §1): giriş >+0.50 AL / <-0.50 SAT; çıkış ±0.40 — bant içinde önceki etiket korunur (composite = 0.5*LT + 0.5*ST)",
+  "composite": 0.0399,
+  "components": [
+    {
+      "name": "btc_price_vs_200dma",
+      "layer": "long_term",
+      "raw": 0.126352,
+      "normalized": -0.0941,
+      "weight": 0.1493,
+      "source": "CryptoQuant price-ohlcv",
+      "note": "BTC price is +12.6% above its 200-day average ($81,506 vs 200DMA $72,363)",
+      "license": "cq"
+    },
+    {
+      "name": "avax_tvl_momentum_30d",
+      "layer": "long_term",
+      "raw": 0.232279,
+      "normalized": 1.0,
+      "weight": 0.0597,
+      "source": "DefiLlama",
+      "note": "Avalanche TVL +23.2% in 30 days ($480M → $591M)",
+      "license": "clean"
+    },
+    {
+      "name": "stablecoin_mcap_momentum",
+      "layer": "long_term",
+      "raw": -0.031688,
+      "normalized": -0.3169,
+      "weight": 0.0597,
+      "source": "DefiLlama stablecoins",
+      "note": "Avalanche stablecoin supply -3.2% in 30 days ($1,462M → $1,415M)",
+      "license": "clean"
+    },
+    {
+      "name": "btc_mvrv_z",
+      "layer": "long_term",
+      "raw": 2.19021,
+      "normalized": -0.7987,
+      "weight": 0.1642,
+      "source": "CryptoQuant capitalization",
+      "note": "BTC MVRV-Z = 2.19 (overvaluation zone)",
+      "license": "cq"
+    },
+    {
+      "name": "btc_nupl_cap",
+      "layer": "long_term",
+      "raw": 0.339126,
+      "normalized": 0.0957,
+      "weight": 0.1343,
+      "source": "CryptoQuant capitalization",
+      "note": "BTC NUPL = 0.339 (moderate profit)",
+      "license": "cq"
+    },
+    {
+      "name": "btc_bci_momentum",
+      "layer": "long_term",
+      "raw": 0.119797,
+      "normalized": 0.2396,
+      "weight": 0.1045,
+      "source": "CryptoQuant capitalization",
+      "note": "BTC BCI proxy (MVRV MA30−MA365) = +0.120 — bull-phase trend",
+      "license": "cq"
+    },
+    {
+      "name": "btc_realized_price_dist",
+      "layer": "long_term",
+      "raw": 0.513148,
+      "normalized": 0.2669,
+      "weight": 0.0896,
+      "source": "CryptoQuant capitalization",
+      "note": "BTC price is +51.3% above realized price (realized ≈ $53,865)",
+      "license": "cq"
+    },
+    {
+      "name": "btc_growth_rate_diff",
+      "layer": "long_term",
+      "raw": 0.059625,
+      "normalized": 0.3975,
+      "weight": 0.1194,
+      "source": "CryptoQuant capitalization",
+      "note": "BTC 30d market cap growth minus realized cap growth = +6.0% (speculative inflow dominant)",
+      "license": "cq"
+    },
+    {
+      "name": "btc_hash_ribbon",
+      "layer": "long_term",
+      "raw": 0.030093,
+      "normalized": 0.6019,
+      "weight": 0.1194,
+      "source": "mempool.space mining",
+      "note": "Hashrate 30d average is +3.0% above the 60d average — miner recovery",
+      "license": "clean"
+    },
+    {
+      "name": "btc_funding",
+      "layer": "short_term",
+      "raw": 0.000346,
+      "normalized": 0.6925,
+      "weight": 0.1446,
+      "source": "CryptoQuant funding-rates",
+      "note": "BTC funding +0.0346% (8h, 24h ago +0.047%) — longs crowding",
+      "license": "cq"
+    },
+    {
+      "name": "eth_funding",
+      "layer": "short_term",
+      "raw": 0.000314,
+      "normalized": 0.628,
+      "weight": 0.0843,
+      "source": "CryptoQuant funding-rates",
+      "note": "ETH funding +0.0314% (8h, 24h ago +0.053%) — longs crowding",
+      "license": "cq"
+    },
+    {
+      "name": "oi_change_24h",
+      "layer": "short_term",
+      "raw": -0.007851,
+      "normalized": -0.0393,
+      "weight": 0.1084,
+      "source": "CryptoQuant open-interest",
+      "note": "BTC open interest (OI, all_exchange) -0.8% in 24h ($25.20B → $25.00B)",
+      "license": "cq"
+    },
+    {
+      "name": "eth_oi_change_24h",
+      "layer": "short_term",
+      "raw": -0.020476,
+      "normalized": -0.1024,
+      "weight": 0.0602,
+      "source": "CryptoQuant open-interest (ETH)",
+      "note": "ETH open interest (OI, all_exchange) -2.0% in 24h ($12.35B → $12.10B)",
+      "license": "cq"
+    },
+    {
+      "name": "price_momentum_24h",
+      "layer": "short_term",
+      "raw": -0.007675,
+      "normalized": -0.0768,
+      "weight": 0.0723,
+      "source": "CryptoQuant price-ohlcv",
+      "note": "BTC/ETH average 24h price change -0.8% (daily closes)",
+      "license": "cq"
+    },
+    {
+      "name": "btc_liq_asymmetry",
+      "layer": "short_term",
+      "raw": 0.481127,
+      "normalized": -0.4811,
+      "weight": 0.0964,
+      "source": "CryptoQuant liquidations",
+      "note": "BTC 24h liquidations: long $23M vs short $8M — long flush dominant (selling pressure; if extreme, a bottom may be near)",
+      "license": "cq"
+    },
+    {
+      "name": "eth_liq_asymmetry",
+      "layer": "short_term",
+      "raw": 0.524972,
+      "normalized": -0.525,
+      "weight": 0.0482,
+      "source": "CryptoQuant liquidations",
+      "note": "ETH 24h liquidations: long $32M vs short $10M — long flush dominant (selling pressure)",
+      "license": "cq"
+    },
+    {
+      "name": "trx_momentum_7d",
+      "layer": "short_term",
+      "raw": 0.010496,
+      "normalized": 0.042,
+      "weight": 0.0482,
+      "source": "CryptoQuant price-ohlcv (TRX)",
+      "note": "TRX 7-day return +1.0% (close $0.3351)",
+      "license": "cq"
+    },
+    {
+      "name": "xrp_funding",
+      "layer": "short_term",
+      "raw": 0.000204,
+      "normalized": 0.4075,
+      "weight": 0.0241,
+      "source": "CryptoQuant funding-rates (XRP)",
+      "note": "XRP funding +0.0204% (8h, 24h ago +0.055%) — longs crowding",
+      "license": "cq"
+    },
+    {
+      "name": "xrp_oi_change_24h",
+      "layer": "short_term",
+      "raw": -0.008007,
+      "normalized": -0.04,
+      "weight": 0.0181,
+      "source": "CryptoQuant open-interest (XRP)",
+      "note": "XRP open interest (OI, all_exchange) -0.8% in 24h ($885M → $878M)",
+      "license": "cq"
+    },
+    {
+      "name": "xrp_liq_asymmetry",
+      "layer": "short_term",
+      "raw": 0.898192,
+      "normalized": -0.8982,
+      "weight": 0.0181,
+      "source": "CryptoQuant liquidations (XRP)",
+      "note": "XRP 24h liquidations: long $4M vs short $0M — long flush dominant (selling pressure)",
+      "license": "cq"
+    },
+    {
+      "name": "fear_greed",
+      "layer": "short_term",
+      "raw": 55,
+      "normalized": 0.1,
+      "weight": 0.0723,
+      "source": "alternative.me F&G",
+      "note": "Fear & Greed = 55/100 (Greed)",
+      "license": "clean"
+    },
+    {
+      "name": "cb_premium",
+      "layer": "short_term",
+      "raw": -0.145043,
+      "normalized": -0.4835,
+      "weight": 0.0843,
+      "source": "CryptoQuant coinbase-premium-index",
+      "note": "Coinbase premium -0.15% — US spot selling / discount",
+      "license": "cq"
+    },
+    {
+      "name": "kr_premium",
+      "layer": "short_term",
+      "raw": 0.97,
+      "normalized": 0.194,
+      "weight": 0.0602,
+      "source": "CryptoQuant korea-premium-index",
+      "note": "Korea premium (kimchi) +0.97% — Korean retail demand strong",
+      "license": "cq"
+    },
+    {
+      "name": "eth_btc_oi_ratio",
+      "layer": "short_term",
+      "raw": -0.117075,
+      "normalized": -0.5854,
+      "weight": 0.0602,
+      "source": "CryptoQuant open-interest (günlük)",
+      "note": "ETH/BTC OI ratio 0.478 vs 90d avg 0.541 (-11.7%) — leverage rotating toward BTC",
+      "license": "cq"
+    },
+    {
+      "name": "fred_dollar_momentum",
+      "layer": "regime",
+      "raw": 0.027408,
+      "normalized": -0.9136,
+      "weight": 0.34,
+      "source": "FRED DTWEXBGS",
+      "note": "Broad dollar index 30d change +2.7% (121.6) — USD strengthening: risk-off",
+      "license": "clean"
+    },
+    {
+      "name": "fred_vix_momentum",
+      "layer": "regime",
+      "raw": 2.14,
+      "normalized": -0.2675,
+      "weight": 0.33,
+      "source": "FRED VIXCLS",
+      "note": "VIX 30d change +2.1 pts (16.5) — fear rising: risk-off",
+      "license": "clean"
+    },
+    {
+      "name": "fred_dgs10_momentum",
+      "layer": "regime",
+      "raw": 0.31,
+      "normalized": -0.62,
+      "weight": 0.33,
+      "source": "FRED DGS10",
+      "note": "US 10Y yield 30d change +0.31 pts (5.10) — tightening: risk-off",
+      "license": "clean"
+    }
+  ],
+  "metrics_raw": {
+    "coingecko": {
+      "btc_price": null,
+      "eth_price": null,
+      "avax_price": null,
+      "btc_24h_change": null,
+      "eth_24h_change": null,
+      "avax_24h_change": null,
+      "btc_200dma": null,
+      "btc_price_vs_200dma": null
+    },
+    "okx": {
+      "avax_funding": null,
+      "btc_funding": null,
+      "avax_funding_24h_ago": null,
+      "btc_funding_24h_ago": null,
+      "avax_oi_usd": null,
+      "avax_oi_usd_prev": null
+    },
+    "defillama": {
+      "avax_tvl_now": 591134110,
+      "avax_tvl_30d_ago": 479708089,
+      "stable_mcap_now": 1415468673.88,
+      "stable_mcap_30d_ago": 1461789477
+    },
+    "bgeometrics": {
+      "mvrv": null,
+      "nupl": null,
+      "sopr": null,
+      "profit-loss": null
+    },
+    "cryptoquant": {
+      "btc_price": 81505.99332166,
+      "eth_price": 2420.50217235,
+      "btc_200dma": 72362.80700506186,
+      "btc_price_vs_200dma": 0.12635201279517205,
+      "btc_24h_change": -0.007645061709285361,
+      "eth_24h_change": -0.007705466854031839,
+      "btc_funding": 0.0003462518666666667,
+      "eth_funding": 0.0003139976,
+      "btc_oi_usd": 25004038971.272575,
+      "btc_oi_usd_prev": 25201906047.865868,
+      "btc_long_liq_usd_24h": 23073509.12928,
+      "btc_short_liq_usd_24h": 8083179.73307,
+      "eth_long_liq_usd_24h": 31837666.62262797,
+      "eth_short_liq_usd_24h": 9917424.95132824,
+      "trx_price": 0.33507853,
+      "trx_7d_return": 0.01049550202679006,
+      "xrp_funding": 0.00020374832000000004,
+      "xrp_oi_usd": 877967607.1206427,
+      "xrp_oi_usd_prev": 885054466.5723052,
+      "xrp_long_liq_usd_24h": 4046912.47135,
+      "xrp_short_liq_usd_24h": 217053.64892,
+      "eth_oi_usd": 12101403972.790464,
+      "eth_oi_usd_prev": 12354366131.284859,
+      "btc_cb_premium": -0.14504294,
+      "btc_kr_premium": 0.97
+    },
+    "coinmetrics": {
+      "eth_btc_addr_ratio": 1.2478566489098963,
+      "eth_btc_tx_ratio": 2.5368857334080483
+    },
+    "coingecko_market": {
+      "btc_dominance": null,
+      "top_performers": null,
+      "worst_performers": null
+    },
+    "etherscan": {
+      "eth_total_supply": null
+    },
+    "cryptoquant_capitalization": {
+      "btc": {
+        "market_cap": 1639602450837.9084,
+        "realized_cap": 1083570596293.9429,
+        "mvrv": 1.5131477879205293,
+        "nupl": 0.3391260206154297,
+        "mvrv_z_raw": 2.1902098516549895,
+        "bci_momentum": 0.11979664841417548,
+        "realized_price": 53865.19015017765,
+        "realized_price_dist": 0.5131477879205294,
+        "growth_rate_diff": 0.05962518333568756
+      },
+      "eth": null
+    },
+    "cryptoquant_credit_log": {
+      "btc/price-ohlcv": 260,
+      "eth/price-ohlcv": 260,
+      "btc/funding-rates": 48,
+      "eth/funding-rates": 48,
+      "xrp/funding-rates": 48,
+      "btc/open-interest": 48,
+      "eth/open-interest": 48,
+      "xrp/open-interest": 48,
+      "btc/liquidations": 24,
+      "eth/liquidations": 24,
+      "xrp/liquidations": 24,
+      "btc/capitalization": 364,
+      "eth/capitalization": 365,
+      "btc/coinbase-premium-index": 24,
+      "btc/korea-premium-index": 30,
+      "btc/open-interest(day)": 90,
+      "eth/open-interest(day)": 90,
+      "trx/price-ohlcv": 30
+    },
+    "fear_greed": {
+      "fear_greed": 55,
+      "fear_greed_label": "Greed"
+    },
+    "mempool": {
+      "hashrate_ma30": 9.760951986392864e+20,
+      "hashrate_ma60": 9.475792922045453e+20,
+      "hash_ribbon_rel": 0.03009342507728152,
+      "difficulty_last_change_pct": 1.04163
+    },
+    "binance": {
+      "btc_taker_ls_ratio": null,
+      "btc_taker_slope_7d": null
+    },
+    "okx_spot_perp": {
+      "btc_spot_okx": null,
+      "btc_swap_okx": null,
+      "spot_perp_gap": null
+    },
+    "fred": {
+      "fred_DTWEXBGS": 121.6023,
+      "fred_DTWEXBGS_chg30_pct": 0.027408301741407293,
+      "fred_VIXCLS": 16.46,
+      "fred_VIXCLS_chg30": 2.1400000000000006,
+      "fred_DGS10": 5.1,
+      "fred_DGS10_chg30": 0.3099999999999996
+    }
+  },
+  "errors": [
+    "coingecko simple/price başarısız: ConnectionError: HTTPSConnectionPool(host='api.coingecko.com', port=443): Max retries exceeded with url: /api/v3/simple/price?ids=bitcoin%2Cethereum%2Cavalanche-2&vs_currencies=usd&include_24hr_change=true (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f26bdd2dc10>: Failed to establish a new connection: [Errno 101] Network is unreachable'))",
+    "okx funding AVAX-USDT-SWAP başarısız: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/public/funding-rate?instId=AVAX-USDT-SWAP (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f26bcdbf4d0>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
+    "okx funding-history AVAX-USDT-SWAP başarısız: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/public/funding-rate-history?instId=AVAX-USDT-SWAP&limit=10 (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f26bcdbfad0>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
+    "okx funding BTC-USDT-SWAP başarısız: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/public/funding-rate?instId=BTC-USDT-SWAP (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f26bcdf0290>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
+    "okx funding-history BTC-USDT-SWAP başarısız: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/public/funding-rate-history?instId=BTC-USDT-SWAP&limit=10 (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f26bd05cda0>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
+    "okx open-interest başarısız: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/public/open-interest?instType=SWAP&uly=AVAX-USDT (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f26bcdbfd10>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
+    "okx OI geçmişi (rubik) başarısız: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/rubik/stat/contracts/open-interest-volume?ccy=AVAX&period=1D (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f26bcdbe780>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
+    "bgeometrics mvrv erişilemedi: HTTPError: 429 Client Error:  for url: https://api.bgeometrics.com/v1/mvrv",
+    "bgeometrics nupl erişilemedi: HTTPError: 429 Client Error:  for url: https://api.bgeometrics.com/v1/nupl",
+    "bgeometrics sopr erişilemedi: HTTPError: 429 Client Error:  for url: https://api.bgeometrics.com/v1/sopr",
+    "bgeometrics profit-loss erişilemedi: HTTPError: 429 Client Error:  for url: https://api.bgeometrics.com/v1/profit-loss",
+    "bgeometrics erişilemedi — tüm on-chain metrikler null",
+    "binance taker long/short erişilemedi: ConnectionError: HTTPSConnectionPool(host='fapi.binance.com', port=443): Max retries exceeded with url: /futures/data/takerlongshortRatio?symbol=BTCUSDT&period=1d&limit=30 (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f26bcdbf6e0>: Failed to establish a new connection: [Errno 101] Network is unreachable'))",
+    "okx spot-perp gap erişilemedi: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/market/ticker?instId=BTC-USDT (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f26bcdf11f0>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
+    "coingecko /global erişilemedi: ConnectionError: HTTPSConnectionPool(host='api.coingecko.com', port=443): Max retries exceeded with url: /api/v3/global (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f26bcdf2b10>: Failed to establish a new connection: [Errno 101] Network is unreachable'))",
+    "coingecko /coins/markets erişilemedi: ConnectionError: HTTPSConnectionPool(host='api.coingecko.com', port=443): Max retries exceeded with url: /api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&price_change_percentage=24h%2C7d (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f26bcdf2540>: Failed to establish a new connection: [Errno 101] Network is unreachable'))",
+    "etherscan tokensupply erişilemedi: ConnectionError: HTTPSConnectionPool(host='api.etherscan.io', port=443): Max retries exceeded with url: /v2/api?chainid=1&module=stats&action=tokensupply&apikey=*** (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f26bcdf0920>: Failed to establish a new connection: [Errno 101] Network is unreachable'))",
+    "long_term: erişilemeyen bileşen(ler) düşüldü: btc_mvrv, btc_nupl, btc_sopr, btc_supply_profit, eth_btc_active_addr_ratio, eth_btc_mvrv_ratio, eth_btc_tx_ratio, eth_mvrv_z, eth_nupl_cap — ağırlıklar yeniden normalize edildi",
+    "short_term: erişilemeyen bileşen(ler) düşüldü: binance_taker_cvd, okx_spot_perp_gap — ağırlıklar yeniden normalize edildi"
+  ]
+}
