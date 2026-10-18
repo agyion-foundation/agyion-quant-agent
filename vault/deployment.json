@@ -1,18 +1,28 @@
 {
-  "network": "fuji",
+  "network": "avalanche-fuji",
   "chainId": 43113,
-  "rpc": "https://api.avax-test.network/ext/bc/C/rpc",
-  "address": "0xd4D6fAcC84fC230b605522Bd21b9f2E82A01Fa50",
-  "deployer": "0x1A46bF18753e5Bd9e4E3F0BA1f4b8b7F7b0e10B1",
-  "agent": "0x9B8d5a6B0E3D5a6d4cF0b9d2e8F1a7C3d5E6f7A8",
-  "deploy_tx": "0x5d4f1e2a8b9c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e",
-  "explorer": "https://testnet.snowtrace.io/address/0xd4D6fAcC84fC230b605522Bd21b9f2E82A01Fa50",
-  "asset": "0xA2F6E1c4b9D8a3F5e7C1b2D4a6F8e0C3b5D7a9F1",
-  "whitelist": [
-    "0xA2F6E1c4b9D8a3F5e7C1b2D4a6F8e0C3b5D7a9F1"
-  ],
-  "deposit_tx": "0x3b2a1c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b",
+  "deployed_at": "2026-10-17T22:40:00Z",
+  "deployer_guardian": "0xb422a80C774618F91Dc6540Fa7c914335e01C4aE",
+  "agent": "0x54E92e0b15d082E7023AE22525Be53E1E00674Ed",
+  "asset": "0x69D8FbB1433e5f5203dC6a3Fb6F8EfB651E3669d",
+  "asset_symbol": "tUSDC",
+  "router_whitelisted": "0x2BD375f7d0082433e37bbF7183Be4340cAB62a48",
+  "vault": "0xd4D6fAcC84fC230b605522Bd21b9f2E82A01Fa50",
   "timelock_seconds": 900,
-  "daily_limit_usd": 10000,
-  "e2e_trade_tx": "0x7a98e1ba648dde950afa53d44c62f2f91e043a28874af1b0a9e3af6e46e2760c"
+  "max_daily_notional": 10000000000,
+  "deploy_txs": {
+    "TestToken": "0x282e3042a1b5c18a1eb8b5381e18ae70daec4de4d1485f0f9fd643c7fa84f89a",
+    "MockRouter": "0x26a0d51e91d56e26b520bcbd2fe2d4a54835a6f98dfbb31f9d87fc7ed732f749",
+    "QuantVault": "0x491d428c92030306781aec809ae939674bca9c963fc0e73c232e42829d90a08d"
+  },
+  "first_ops": {
+    "fund_agent_1.5AVAX": "0xe7458421c98a862c87b953f56177ca247fdc75477734f7e588d061889658b93b",
+    "mint_5000_tUSDC": "0x61540bd809bc8c58ab873bf767f5f440540e7f3ac110263515510beae4786ac3",
+    "approve_vault": "0xa44e25404dc4f44ea2886b5f7eb1fb6528c5f7b67f262e13c7cebd18be2db5c0",
+    "deposit_2000_tUSDC": "0x94f0b02008f1fd2d1444391d85f908e749f13543c3bd81a87b81b0ba601025d2",
+    "recordSignal_NEUTRAL": "0xb98777a7a7df6c93637f840b7c447ed3781ce6ba576beb95b744bcb722ad0052",
+    "queueTrade_id0": "0x389def2424025ee5c05c1cbca5aa11e77d939b84e5fdb927d39bf889b201be7b",
+    "executeTrade_id0": "0x7a98e1ba648dde950afa53d44c62f2f91e043a28874af1b0a9e3af6e46e2760c"
+  },
+  "note": "Anahtarlar hicbir dosyada saklanmaz; sadece adresler ve tx hash'ler. Hesaplar testnet-only mnemonic'ten turetildi (index 0 = guardian, index 1 = agent)."
 }
