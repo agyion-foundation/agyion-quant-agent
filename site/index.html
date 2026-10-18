@@ -255,6 +255,33 @@
 </div>
 
 <script src="data.js"></script>
-<script src="app.js"></script>
+<script>
+/* Live snapshot loader: try fresh snapshot from GitHub raw, else keep embedded data.js */
+(function () {
+  var LIVE_URL = "https://raw.githubusercontent.com/agyion-foundation/agyion-quant-agent/main/engine/data/snapshot.json";
+  var SIG = { "SAT": "SELL", "NÖTR": "NEUTRAL", "AL": "BUY" };
+  function boot() {
+    var s = document.createElement("script");
+    s.src = "app.js";
+    document.body.appendChild(s);
+  }
+  fetch(LIVE_URL, { cache: "no-store" }).then(function (r) {
+    if (!r.ok) throw 0;
+    return r.json();
+  }).then(function (s) {
+    var D = window.AGYION_DATA;
+    D.generated_at = s.generated_at;
+    D.composite = s.composite;
+    D.long_term_index = s.long_term_index;
+    D.short_term_index = s.short_term_index;
+    D.regime_index = s.regime_index;
+    D.signal = SIG[s.signal] || s.signal;
+    if (s.signal_rule) D.signal_rule = s.signal_rule;
+    try { D.btc_price = s.metrics_raw.cryptoquant.btc_price || D.btc_price; } catch (e) {}
+    D.live = true;
+    boot();
+  }).catch(boot);
+})();
+</script>
 </body>
 </html>
