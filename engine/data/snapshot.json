@@ -321,26 +321,28 @@
       "btc_24h_change": -0.007645061709285361,
       "eth_24h_change": -0.007705466854031839,
       "btc_funding": 0.0003462518666666667,
-      "eth_funding": 0.0003139971291866029,
-      "btc_oi_usd": 25002075678,
-      "btc_oi_usd_prev": 25221873508,
-      "btc_long_liq_usd_24h": 22673207,
-      "btc_short_liq_usd_24h": 8442349,
-      "eth_long_liq_usd_24h": 31990713,
-      "eth_short_liq_usd_24h": 10180866,
-      "trx_price": 0.3351399,
-      "trx_7d_return": 0.010495861539840536,
-      "xrp_funding": 0.00020351095999999998,
-      "xrp_oi_usd": 877968018,
-      "xrp_oi_usd_prev": 885017700,
-      "xrp_long_liq_usd_24h": 3880462,
-      "xrp_short_liq_usd_24h": 439541,
-      "btc_cb_premium": -0.145043,
+      "eth_funding": 0.0003139976,
+      "btc_oi_usd": 25004038971.272575,
+      "btc_oi_usd_prev": 25201906047.865868,
+      "btc_long_liq_usd_24h": 23073509.12928,
+      "btc_short_liq_usd_24h": 8083179.73307,
+      "eth_long_liq_usd_24h": 31837666.62262797,
+      "eth_short_liq_usd_24h": 9917424.95132824,
+      "trx_price": 0.33507853,
+      "trx_7d_return": 0.01049550202679006,
+      "xrp_funding": 0.00020374832000000004,
+      "xrp_oi_usd": 877967607.1206427,
+      "xrp_oi_usd_prev": 885054466.5723052,
+      "xrp_long_liq_usd_24h": 4046912.47135,
+      "xrp_short_liq_usd_24h": 217053.64892,
+      "eth_oi_usd": 12101403972.790464,
+      "eth_oi_usd_prev": 12354366131.284859,
+      "btc_cb_premium": -0.14504294,
       "btc_kr_premium": 0.97
     },
     "coinmetrics": {
-      "eth_btc_addr_ratio": null,
-      "eth_btc_tx_ratio": null
+      "eth_btc_addr_ratio": 1.2478566489098963,
+      "eth_btc_tx_ratio": 2.5368857334080483
     },
     "coingecko_market": {
       "btc_dominance": null,
@@ -352,19 +354,17 @@
     },
     "cryptoquant_capitalization": {
       "btc": {
-        "market_cap": 1625980476032,
-        "realized_cap": 694993138604,
-        "mvrv": 2.3395841527083245,
-        "nupl": 0.3391260548446188,
-        "mvrv_z_raw": 2.190209819661859,
-        "bci_momentum": 0.11979705210130852,
-        "realized_price": 53864.61640186129,
-        "realized_price_dist": 0.5131483008557714,
-        "growth_rate_diff": 0.059625223813914286
+        "market_cap": 1639602450837.9084,
+        "realized_cap": 1083570596293.9429,
+        "mvrv": 1.5131477879205293,
+        "nupl": 0.3391260206154297,
+        "mvrv_z_raw": 2.1902098516549895,
+        "bci_momentum": 0.11979664841417548,
+        "realized_price": 53865.19015017765,
+        "realized_price_dist": 0.5131477879205294,
+        "growth_rate_diff": 0.05962518333568756
       },
-      "eth": {
-        "market_cap": 292220725094
-      }
+      "eth": null
     },
     "cryptoquant_credit_log": {
       "btc/price-ohlcv": 260,
@@ -378,8 +378,8 @@
       "btc/liquidations": 24,
       "eth/liquidations": 24,
       "xrp/liquidations": 24,
-      "btc/capitalization": 400,
-      "eth/capitalization": 400,
+      "btc/capitalization": 364,
+      "eth/capitalization": 365,
       "btc/coinbase-premium-index": 24,
       "btc/korea-premium-index": 30,
       "btc/open-interest(day)": 90,
@@ -391,10 +391,10 @@
       "fear_greed_label": "Greed"
     },
     "mempool": {
-      "hashrate_ma30": 1170000000000000000,
-      "hashrate_ma60": 1135800000000000000,
-      "hash_ribbon_rel": 0.030092622625662343,
-      "difficulty_last_change_pct": null
+      "hashrate_ma30": 9.760951986392864e+20,
+      "hashrate_ma60": 9.475792922045453e+20,
+      "hash_ribbon_rel": 0.03009342507728152,
+      "difficulty_last_change_pct": 1.04163
     },
     "binance": {
       "btc_taker_ls_ratio": null,
@@ -406,34 +406,33 @@
       "spot_perp_gap": null
     },
     "fred": {
-      "fred_DTWEXBGS": 121.6,
-      "fred_DTWEXBGS_chg30_pct": 0.0274080794932954,
-      "fred_VIXCLS": 16.5,
-      "fred_VIXCLS_chg30": 2.14,
+      "fred_DTWEXBGS": 121.6023,
+      "fred_DTWEXBGS_chg30_pct": 0.027408301741407293,
+      "fred_VIXCLS": 16.46,
+      "fred_VIXCLS_chg30": 2.1400000000000006,
       "fred_DGS10": 5.1,
-      "fred_DGS10_chg30": 0.31
+      "fred_DGS10_chg30": 0.3099999999999996
     }
   },
   "errors": [
-    "coingecko simple/price başarısız: ClientError: 403 Client Error: Forbidden for url: https://api.coingecko.com/api/v3/simple/price?ids=bitcoin%2Cethereum%2Cavalanche-2&vs_currencies=usd&include_24hr_change=true",
-    "okx funding AVAX-USDT-SWAP başarısız: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/public/funding-rate?instId=AVAX-USDT-SWAP (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f0a2dc3c9d0>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
-    "okx funding-history AVAX-USDT-SWAP başarısız: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/public/funding-rate-history?instId=AVAX-USDT-SWAP&limit=10 (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f0a2dcda110>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
-    "okx funding BTC-USDT-SWAP başarısız: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/public/funding-rate?instId=BTC-USDT-SWAP (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f0a2dcdad50>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
-    "okx funding-history BTC-USDT-SWAP başarısız: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/public/funding-rate-history?instId=BTC-USDT-SWAP&limit=10 (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f0a2dcdb350>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
-    "okx open-interest başarısız: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/public/open-interest?instType=SWAP&uly=AVAX-USDT (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f0a2dcdbb50>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
-    "okx OI geçmişi (rubik) başarısız: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/rubik/stat/contracts/open-interest-volume?ccy=AVAX&period=1D (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f0a2dcc3e10>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
-    "bgeometrics mvrv erişilemedi: ConnectTimeout: HTTPSConnectionPool(host='api.bgeometrics.com', port=443): Max retries exceeded with url: /v1/mvrv (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f0a2dcc6510>, 'Connection to api.bgeometrics.com timed out. (connect timeout=15)'))",
-    "bgeometrics nupl erişilemedi: ConnectTimeout: HTTPSConnectionPool(host='api.bgeometrics.com', port=443): Max retries exceeded with url: /v1/nupl (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f0a2dcc7b10>, 'Connection to api.bgeometrics.com timed out. (connect timeout=15)'))",
-    "bgeometrics sopr erişilemedi: ConnectTimeout: HTTPSConnectionPool(host='api.bgeometrics.com', port=443): Max retries exceeded with url: /v1/sopr (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f0a2dd19190>, 'Connection to api.bgeometrics.com timed out. (connect timeout=15)'))",
-    "bgeometrics profit-loss erişilemedi: ConnectTimeout: HTTPSConnectionPool(host='api.bgeometrics.com', port=443): Max retries exceeded with url: /v1/profit-loss (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f0a2dd19710>, 'Connection to api.bgeometrics.com timed out. (connect timeout=15)'))",
+    "coingecko simple/price başarısız: ConnectionError: HTTPSConnectionPool(host='api.coingecko.com', port=443): Max retries exceeded with url: /api/v3/simple/price?ids=bitcoin%2Cethereum%2Cavalanche-2&vs_currencies=usd&include_24hr_change=true (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f26bdd2dc10>: Failed to establish a new connection: [Errno 101] Network is unreachable'))",
+    "okx funding AVAX-USDT-SWAP başarısız: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/public/funding-rate?instId=AVAX-USDT-SWAP (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f26bcdbf4d0>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
+    "okx funding-history AVAX-USDT-SWAP başarısız: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/public/funding-rate-history?instId=AVAX-USDT-SWAP&limit=10 (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f26bcdbfad0>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
+    "okx funding BTC-USDT-SWAP başarısız: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/public/funding-rate?instId=BTC-USDT-SWAP (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f26bcdf0290>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
+    "okx funding-history BTC-USDT-SWAP başarısız: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/public/funding-rate-history?instId=BTC-USDT-SWAP&limit=10 (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f26bd05cda0>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
+    "okx open-interest başarısız: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/public/open-interest?instType=SWAP&uly=AVAX-USDT (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f26bcdbfd10>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
+    "okx OI geçmişi (rubik) başarısız: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/rubik/stat/contracts/open-interest-volume?ccy=AVAX&period=1D (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f26bcdbe780>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
+    "bgeometrics mvrv erişilemedi: HTTPError: 429 Client Error:  for url: https://api.bgeometrics.com/v1/mvrv",
+    "bgeometrics nupl erişilemedi: HTTPError: 429 Client Error:  for url: https://api.bgeometrics.com/v1/nupl",
+    "bgeometrics sopr erişilemedi: HTTPError: 429 Client Error:  for url: https://api.bgeometrics.com/v1/sopr",
+    "bgeometrics profit-loss erişilemedi: HTTPError: 429 Client Error:  for url: https://api.bgeometrics.com/v1/profit-loss",
     "bgeometrics erişilemedi — tüm on-chain metrikler null",
-    "binance taker long/short erişilemedi: ConnectTimeout: HTTPSConnectionPool(host='fapi.binance.com', port=443): Max retries exceeded with url: /futures/data/takerlongshortRatio?symbol=BTCUSDT&period=1d&limit=30 (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f0a2dd1af50>, 'Connection to fapi.binance.com timed out. (connect timeout=10)'))",
-    "okx spot-perp gap erişilemedi: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/market/ticker?instId=BTC-USDT (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f0a2dd1b810>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
-    "fred DTWEXBGS erişilemedi: ValueError: yetersiz seri (21 nokta)",
-    "coinmetrics community erişilemedi: ConnectTimeout: HTTPSConnectionPool(host='community-api.coinmetrics.io', port=443): Max retries exceeded with url: /v4/timeseries/asset-metrics?assets=btc%2Ceth&metrics=CapMrktCurUSD%2CAdrActCnt%2CTxCnt&start_time=2025-09-12&frequency=1d&page_size=10000 (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f0a2dd28550>, 'Connection to community-api.coinmetrics.io timed out. (connect timeout=20)'))",
-    "coingecko /global erişilemedi: ConnectTimeout: HTTPSConnectionPool(host='api.coingecko.com', port=443): Max retries exceeded with url: /api/v3/global (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f0a2dd295d0>, 'Connection to api.coingecko.com timed out. (connect timeout=10)'))",
-    "coingecko /coins/markets erişilemedi: ConnectTimeout: HTTPSConnectionPool(host='api.coingecko.com', port=443): Max retries exceeded with url: /api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&price_change_percentage=24h%2C7d (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f0a2dd29b50>, 'Connection to api.coingecko.com timed out. (connect timeout=15)'))",
-    "etherscan: ETHERSCAN_API_KEY yok — atlandı",
+    "binance taker long/short erişilemedi: ConnectionError: HTTPSConnectionPool(host='fapi.binance.com', port=443): Max retries exceeded with url: /futures/data/takerlongshortRatio?symbol=BTCUSDT&period=1d&limit=30 (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f26bcdbf6e0>: Failed to establish a new connection: [Errno 101] Network is unreachable'))",
+    "okx spot-perp gap erişilemedi: ConnectTimeout: HTTPSConnectionPool(host='www.okx.com', port=443): Max retries exceeded with url: /api/v5/market/ticker?instId=BTC-USDT (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f26bcdf11f0>, 'Connection to www.okx.com timed out. (connect timeout=10)'))",
+    "coingecko /global erişilemedi: ConnectionError: HTTPSConnectionPool(host='api.coingecko.com', port=443): Max retries exceeded with url: /api/v3/global (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f26bcdf2b10>: Failed to establish a new connection: [Errno 101] Network is unreachable'))",
+    "coingecko /coins/markets erişilemedi: ConnectionError: HTTPSConnectionPool(host='api.coingecko.com', port=443): Max retries exceeded with url: /api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&price_change_percentage=24h%2C7d (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f26bcdf2540>: Failed to establish a new connection: [Errno 101] Network is unreachable'))",
+    "etherscan tokensupply erişilemedi: ConnectionError: HTTPSConnectionPool(host='api.etherscan.io', port=443): Max retries exceeded with url: /v2/api?chainid=1&module=stats&action=tokensupply&apikey=*** (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f26bcdf0920>: Failed to establish a new connection: [Errno 101] Network is unreachable'))",
+    "long_term: erişilemeyen bileşen(ler) düşüldü: btc_mvrv, btc_nupl, btc_sopr, btc_supply_profit, eth_btc_active_addr_ratio, eth_btc_mvrv_ratio, eth_btc_tx_ratio, eth_mvrv_z, eth_nupl_cap — ağırlıklar yeniden normalize edildi",
     "short_term: erişilemeyen bileşen(ler) düşüldü: binance_taker_cvd, okx_spot_perp_gap — ağırlıklar yeniden normalize edildi"
   ]
 }
