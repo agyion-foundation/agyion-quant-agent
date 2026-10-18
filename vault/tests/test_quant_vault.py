@@ -1,348 +1,256 @@
 #!/usr/bin/env python3
-"""test_quant_vault.py — QuantVault için 19 senaryoluk adversarial test paketi.
-
-Yöntem: gerçek derlenmiş kontrat + gerçek süreç-içi EVM (eth-tester/pyevm).
-Mock yok; her test gerçek calldata ile zincire işlem gönderir.
-
-Çalıştırma:  python3 vault/tests/test_quant_vault.py
-Çıktı:       "RESULTS: 19/19 passed" + vault/tests/last_results.json
+# -*- coding: utf-8 -*-
 """
+QuantVault güvenlik testleri — gerçek EVM (eth-tester / py-evm) üzerinde.
+
+Senaryolar (görev tanımındaki a-g):
+  a) agent withdraw denemesi → revert (agent'ın share'i yok; fon çekemez)
+  b) whitelist dışı target → queueTrade revert
+  c) günlük notional limit aşımı → revert
+  d) timelock dolmadan executeTrade → revert
+  e) guardian veto akışı → veto sonrası execute revert
+  f) pause sırasında agent işlemi → revert (kullanıcı çekimi çalışır)
+  g) normal deposit/withdraw her zaman çalışır (pause dahil)
+Ek:
+  h) whitelist'li target + selector ile timelock sonrası execute → başarılı
+  i) whitelist'li target'ta whitelist'siz selector → revert
+  j) agent asset kontratını doğrudan çağıramaz → revert
+  k) agent owner fonksiyonlarını çağıramaz → revert
+  l) SWAP_SELECTOR sabiti (agent_loop.py) keccak ile uyumlu
+
+Çalıştırma:  python3 tests/test_quant_vault.py
+Çıkış: PASS/FAIL tablosu (SECURITY_TEST_REPORT.md bu çıktıdan üretilir).
+"""
+from __future__ import annotations
 
 import json
 import sys
-import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent.parent
+VAULT_DIR = Path(__file__).resolve().parent.parent
+CONTRACT_DIR = VAULT_DIR / "contract"
+SOLC_VERSION = "0.8.24"
+TIMELOCK = 900            # 15 dk
+MAX_DAILY = 10_000 * 10**6
 
-from eth_tester import EthereumTester  # noqa: E402
-from web3 import Web3  # noqa: E402
-from web3.providers.eth_tester import EthereumTesterProvider  # noqa: E402
-
-import solcx  # noqa: E402
-
-SOLC = "0.8.24"
-ONE = 10**6  # tUSDC 6 decimals
+RESULTS: list[tuple[str, bool, str]] = []
 
 
-def compile_all():
-    solcx.install_solc(SOLC)
-    solcx.set_solc_version(SOLC)
-    base = ROOT / "vault" / "contract"
-    srcs = {}
-    for f in ("QuantVault.sol", "TestToken.sol"):
-        srcs[f] = {"content": (base / f).read_text(encoding="utf-8")}
-    std = solcx.compile_standard({
-        "language": "Solidity",
-        "sources": srcs,
-        "settings": {
-            "optimizer": {"enabled": True, "runs": 200},
-            "outputSelection": {"*": {"*": ["abi", "evm.bytecode"]}},
-        },
-    }, allow_paths=[ROOT])
-    return std
+def record(name: str, ok: bool, note: str = "") -> None:
+    RESULTS.append((name, ok, note))
+    print(f"[{'PASS' if ok else 'FAIL'}] {name}" + (f" — {note}" if note else ""))
 
 
-class Chain:
-    """Tek senaryo için taze zincir + deploy edilmiş TestToken + QuantVault."""
-
-    def __init__(self, compiled):
-        self.t = EthereumTester()
-        self.w3 = Web3(EthereumTesterProvider(self.t))
-        self.admin, self.agent, self.user, self.user2, self.rando = \
-            self.w3.eth.accounts[:5]
-
-        tt = compiled["contracts"]["TestToken.sol"]["TestToken"]
-        Token = self.w3.eth.contract(abi=tt["abi"],
-                                     bytecode=tt["evm"]["bytecode"]["object"])
-        h = Token.constructor().transact({"from": self.admin})
-        self.token = self.w3.eth.contract(
-            address=self.w3.eth.get_transaction_receipt(h).contractAddress,
-            abi=tt["abi"])
-
-        qv = compiled["contracts"]["QuantVault.sol"]["QuantVault"]
-        Vault = self.w3.eth.contract(abi=qv["abi"],
-                                     bytecode=qv["evm"]["bytecode"]["object"])
-        h = Vault.constructor(self.token.address, self.agent).transact(
-            {"from": self.admin})
-        self.vault = self.w3.eth.contract(
-            address=self.w3.eth.get_transaction_receipt(h).contractAddress,
-            abi=qv["abi"])
-
-        # kullanıcılara tUSDC dağıt + approve
-        for u, amt in ((self.user, 100_000 * ONE), (self.user2, 50_000 * ONE),
-                       (self.agent, 100_000 * ONE)):
-            self.token.functions.mint(u, amt).transact({"from": self.admin})
-            self.token.functions.approve(self.vault.address, 2**255).transact(
-                {"from": u})
-        # vault'a başlangıç likiditesi (user deposit)
-        self.vault.functions.deposit(10_000 * ONE, self.user).transact(
-            {"from": self.user})
-
-        # whitelist: sahte DEX hedefi (token2) + transfer selector'ı
-        h2 = Token.constructor().transact({"from": self.admin})
-        self.dex = self.w3.eth.contract(
-            address=self.w3.eth.get_transaction_receipt(h2).contractAddress,
-            abi=tt["abi"])
-        sel = bytes.fromhex("a9059cbb")  # transfer(address,uint256)
-        self.vault.functions.setWhitelisted(self.dex.address, sel, True
-                                            ).transact({"from": self.admin})
-        data = sel + (1).to_bytes(32, "big") + (100 * ONE).to_bytes(32, "big")
-        self.trade_data = data
-        self.sel = sel
-
-    def mine(self, seconds):
-        self.t.time_travel(self.t.get_block_by_number("pending")["timestamp"]
-                           + seconds)
-        self.t.mine_block()
-
-    def expect_revert(self, fn, *args, sender, marker=""):
-        try:
-            fn(*args).transact({"from": sender})
-        except Exception as e:  # noqa: BLE001
-            return True, str(e)
-        return False, "REVERT BEKLENİYORDU ama işlem başarılı"
-
-
-RESULTS = []
-
-
-def check(name, fn):
+def expect_revert(name: str, fn, substr: str = "") -> None:
     try:
-        ok, detail = fn()
-    except Exception as e:  # noqa: BLE001
-        ok, detail = False, f"kurulum hatası: {type(e).__name__}: {e}"
-    RESULTS.append({"name": name, "passed": bool(ok), "detail": detail})
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + ("" if ok else f" — {detail}"))
+        fn()
+        record(name, False, "revert BEKLENİYORDU ama başarılı oldu")
+    except Exception as e:
+        msg = str(e)
+        if substr and substr not in msg:
+            record(name, False, f"revert oldu ama mesaj farklı: {msg[:120]}")
+        else:
+            record(name, True, f"revert: {substr or msg[:80]}")
 
 
-def main():
-    print("derleniyor (solc 0.8.24)...")
-    compiled = compile_all()
+def expect_ok(name: str, fn, note: str = "") -> None:
+    try:
+        fn()
+        record(name, True, note)
+    except Exception as e:
+        record(name, False, f"beklenmeyen hata: {e!r}"[:200])
 
-    def fresh():
-        return Chain(compiled)
 
-    # 1 — Agent doğrudan withdraw çağırır
-    def t1():
-        c = fresh()
-        ok, err = c.expect_revert(c.vault.functions.withdraw,
-                                  1000 * ONE, c.agent, c.agent, sender=c.agent)
-        return ok, err[:120]
-    check("1. agent withdraw -> revert", t1)
+def main() -> int:
+    import solcx
+    from web3 import Web3
+    from web3.providers.eth_tester import EthereumTesterProvider
+    from eth_utils import keccak
 
-    # 2 — Agent asset kontratını hedefleyerek executeTrade kuyruğa almaya çalışır
-    def t2():
-        c = fresh()
-        ok, err = c.expect_revert(c.vault.functions.queueTrade,
-                                  c.token.address, 100 * ONE, c.trade_data,
-                                  sender=c.agent)
-        return ok, "cannot trade the vault asset" in err or ok
-    check("2. agent asset'e trade -> revert", t2)
+    if SOLC_VERSION not in [str(v) for str_v in solcx.get_installed_solc_versions() for v in [str_v]]:
+        print(f"[..] solc {SOLC_VERSION} kuruluyor...")
+        solcx.install_solc(SOLC_VERSION)
+    compiled = solcx.compile_files(
+        [str(CONTRACT_DIR / "QuantVault.sol"), str(CONTRACT_DIR / "TestToken.sol")],
+        output_values=["abi", "bin"], solc_version=SOLC_VERSION,
+    )
 
-    # 3 — Agent whitelist dışı hedefe queueTrade
-    def t3():
-        c = fresh()
-        ok, err = c.expect_revert(c.vault.functions.queueTrade,
-                                  c.rando, 100 * ONE, c.trade_data,
-                                  sender=c.agent)
-        return ok, err[:120]
-    check("3. agent whitelist-dışı hedef -> revert", t3)
+    w3 = Web3(EthereumTesterProvider())
+    guardian, agent, user, attacker = w3.eth.accounts[:4]
 
-    # 4 — Tek işlemde günlük limit aşımı
-    def t4():
-        c = fresh()
-        ok, err = c.expect_revert(c.vault.functions.queueTrade,
-                                  c.dex.address, 20_000 * ONE, c.trade_data,
-                                  sender=c.agent)
-        return ok, "exceeds daily limit" in err
-    check("4. per-trade limit aşımı -> revert", t4)
+    # SWAP_SELECTOR sabitini doğrula (agent_loop.py ile aynı olmalı)
+    real_selector = keccak(text="swap(uint256)")[:4]
+    sys.path.insert(0, str(VAULT_DIR))
+    from agent_loop import SWAP_SELECTOR
+    record("l) SWAP_SELECTOR sabiti keccak ile uyumlu", SWAP_SELECTOR == real_selector,
+           f"sabit=0x{SWAP_SELECTOR.hex()} keccak=0x{real_selector.hex()}")
 
-    # 5 — Kümülatif günlük limit aşımı
-    def t5():
-        c = fresh()
-        c.vault.functions.queueTrade(c.dex.address, 6_000 * ONE,
-                                     c.trade_data).transact({"from": c.agent})
-        ok, err = c.expect_revert(c.vault.functions.queueTrade,
-                                  c.dex.address, 5_000 * ONE, c.trade_data,
-                                  sender=c.agent)
-        return ok, "exceeds daily limit" in err
-    check("5. kümülatif limit aşımı -> revert", t5)
+    def deploy(name: str, *args):
+        key = next(k for k in compiled if k.endswith(f":{name}"))
+        c = w3.eth.contract(abi=compiled[key]["abi"], bytecode=compiled[key]["bin"])
+        txh = c.constructor(*args).transact({"from": guardian})
+        addr = w3.eth.get_transaction_receipt(txh).contractAddress
+        return w3.eth.contract(address=addr, abi=compiled[key]["abi"])
 
-    # 6 — Timelock öncesi execute (front-run)
-    def t6():
-        c = fresh()
-        c.vault.functions.queueTrade(c.dex.address, 500 * ONE,
-                                     c.trade_data).transact({"from": c.agent})
-        ok, err = c.expect_revert(c.vault.functions.executeTrade, 0,
-                                  sender=c.agent)
-        return ok, "timelocked" in err
-    check("6. timelock öncesi execute -> revert", t6)
+    token = deploy("TestToken", "Test USDC", "tUSDC")
+    router = deploy("MockRouter")
+    vault = deploy("QuantVault", token.address, agent, TIMELOCK, MAX_DAILY)
+    G = {"from": guardian}
+    A = {"from": agent}
+    U = {"from": user}
 
-    # 7 — Admin veto: iptal edilen trade asla execute edilemez
-    def t7():
-        c = fresh()
-        c.vault.functions.queueTrade(c.dex.address, 500 * ONE,
-                                     c.trade_data).transact({"from": c.agent})
-        c.vault.functions.cancelTrade(0).transact({"from": c.admin})
-        c.mine(16 * 60)
-        ok, err = c.expect_revert(c.vault.functions.executeTrade, 0,
-                                  sender=c.agent)
-        return ok, "not pending" in err
-    check("7. veto edilen trade -> execute revert", t7)
+    # kullanıcıya token + vault'a deposit hazırlığı
+    token.functions.mint(user, 5_000 * 10**6).transact(G)
+    token.functions.mint(guardian, 5_000 * 10**6).transact(G)
+    token.functions.approve(vault.address, 5_000 * 10**6).transact(U)
+    token.functions.approve(vault.address, 5_000 * 10**6).transact(G)
 
-    # 8 — Rastgele çağıran execute denemesi
-    def t8():
-        c = fresh()
-        c.vault.functions.queueTrade(c.dex.address, 500 * ONE,
-                                     c.trade_data).transact({"from": c.agent})
-        c.mine(16 * 60)
-        ok, err = c.expect_revert(c.vault.functions.executeTrade, 0,
-                                  sender=c.rando)
-        return ok, "not the agent" in err
-    check("8. rando execute -> revert", t8)
+    # whitelist: router.swap(uint256)
+    vault.functions.setAllowedCall(router.address, real_selector, True).transact(G)
 
-    # 9 — Rastgele çağıran başkasının share'iyle withdraw
-    def t9():
-        c = fresh()
-        ok, err = c.expect_revert(c.vault.functions.redeem,
-                                  1000 * ONE, c.rando, c.user, sender=c.rando)
-        return ok, err[:120]
-    check("9. rando başkası adına redeem -> revert", t9)
+    def swap_calldata(amount: int) -> bytes:
+        return real_selector + amount.to_bytes(32, "big")
 
-    # 10 — Saldırı sırasında pause: kuyruklar donar
-    def t10():
-        c = fresh()
-        c.vault.functions.queueTrade(c.dex.address, 500 * ONE,
-                                     c.trade_data).transact({"from": c.agent})
-        c.vault.functions.pause().transact({"from": c.admin})
-        c.mine(16 * 60)
-        ok1, _ = c.expect_revert(c.vault.functions.executeTrade, 0,
-                                 sender=c.agent)
-        ok2, _ = c.expect_revert(c.vault.functions.queueTrade,
-                                 c.dex.address, 100 * ONE, c.trade_data,
-                                 sender=c.agent)
-        return ok1 and ok2, "paused"
-    check("10. pause altında agent işlemleri -> revert", t10)
+    # ------------------------------------------------------------------
+    # g) normal deposit/withdraw her zaman çalışır
+    # ------------------------------------------------------------------
+    def g_flow():
+        vault.functions.deposit(1_000 * 10**6).transact(U)
+        sh = vault.functions.sharesOf(user).call()
+        assert sh == 1_000 * 10**6, sh
+        before = token.functions.balanceOf(user).call()
+        vault.functions.withdraw(sh).transact(U)
+        after = token.functions.balanceOf(user).call()
+        assert after - before == 1_000 * 10**6
+        # kalıcı pozisyon: guardian deposit (sonraki testler vault'ta fon olsun)
+        vault.functions.deposit(2_000 * 10**6).transact(G)
+    expect_ok("g) deposit/withdraw izinsiz ve her zaman çalışır", g_flow)
 
-    # 11 — Çift execute
-    def t11():
-        c = fresh()
-        c.vault.functions.queueTrade(c.dex.address, 500 * ONE,
-                                     c.trade_data).transact({"from": c.agent})
-        c.mine(16 * 60)
-        c.vault.functions.executeTrade(0).transact({"from": c.agent})
-        ok, err = c.expect_revert(c.vault.functions.executeTrade, 0,
-                                  sender=c.agent)
-        return ok, "not pending" in err
-    check("11. çift execute -> revert", t11)
+    # ------------------------------------------------------------------
+    # a) agent withdraw denemesi → revert
+    # ------------------------------------------------------------------
+    expect_revert("a) agent withdraw denemesi revert", lambda:
+                  vault.functions.withdraw(1).transact(A), "insufficient shares")
 
-    # 12 — Pause altında admin acil durum çekimi
-    def t12():
-        c = fresh()
-        before = c.token.functions.balanceOf(c.admin).call()
-        c.vault.functions.pause().transact({"from": c.admin})
-        amt = c.token.functions.balanceOf(c.vault.address).call()
-        c.vault.functions.emergencyWithdrawToken(c.token.address, c.admin, amt
-                                                 ).transact({"from": c.admin})
-        after = c.token.functions.balanceOf(c.admin).call()
-        return after - before == amt, f"kurtarılan={after-before}"
-    check("12. admin acil çekim (paused) -> tüm fonlar kurtarılır", t12)
+    # ------------------------------------------------------------------
+    # b) whitelist dışı target → revert
+    # ------------------------------------------------------------------
+    expect_revert("b) non-whitelist target revert", lambda:
+                  vault.functions.queueTrade(attacker, swap_calldata(100), 100).transact(A),
+                  "target not whitelisted")
 
-    # 13 — Agent admin-only fonksiyonları çağırır
-    def t13():
-        c = fresh()
-        oks = []
-        for fn, args in (
-            (c.vault.functions.pause, ()),
-            (c.vault.functions.unpause, ()),
-            (c.vault.functions.cancelTrade, (0,)),
-            (c.vault.functions.setWhitelisted, (c.rando, c.sel, True)),
-            (c.vault.functions.setDailyLimit, (0,)),
-            (c.vault.functions.setAgent, (c.rando,)),
-        ):
-            ok, _ = c.expect_revert(fn, *args, sender=c.agent)
-            oks.append(ok)
-        return all(oks), f"{sum(oks)}/6 revert"
-    check("13. agent admin-only çağrılar -> hepsi revert", t13)
+    # ------------------------------------------------------------------
+    # i) whitelist'li target, whitelist'siz selector → revert
+    # ------------------------------------------------------------------
+    bad_sel = keccak(text="swapReverting(uint256)")[:4]
+    expect_revert("i) whitelist'siz selector revert", lambda:
+                  vault.functions.queueTrade(router.address, bad_sel + (100).to_bytes(32, "big"), 100).transact(A),
+                  "selector not whitelisted")
 
-    # 14 — İlk deposit sıfır-share tuzağı (çok küçük ilk deposit revert'lenir)
-    def t14():
-        c = fresh()
-        # taze vault: t14'te mevcut vault'ta likidite var; yeni Chain yerine
-        # mevcut davranış: 0 asset deposit revert bekleriz
-        ok, err = c.expect_revert(c.vault.functions.deposit, 0, c.user2,
-                                  sender=c.user2)
-        return ok, err[:120]
-    check("14. sıfır deposit -> revert", t14)
+    # ------------------------------------------------------------------
+    # j) agent asset kontratını doğrudan çağıramaz
+    # ------------------------------------------------------------------
+    expect_revert("j) agent asset'i doğrudan çağıramaz", lambda:
+                  vault.functions.queueTrade(token.address, swap_calldata(1), 1).transact(A),
+                  "cannot call asset")
 
-    # 15 — Dürüst akış: deposit -> queue -> bekle -> execute
-    def t15():
-        c = fresh()
-        c.vault.functions.deposit(5_000 * ONE, c.user2).transact({"from": c.user2})
-        c.vault.functions.queueTrade(c.dex.address, 500 * ONE,
-                                     c.trade_data).transact({"from": c.agent})
-        c.mine(16 * 60)
-        c.vault.functions.executeTrade(0).transact({"from": c.agent})
-        t = c.vault.functions.trades(0).call()
-        return t[3] is True, f"executed={t[3]}"
-    check("15. dürüst akış deposit->queue->wait->execute", t15)
+    # ------------------------------------------------------------------
+    # c) günlük limit aşımı → revert
+    # ------------------------------------------------------------------
+    expect_revert("c1) tek seferde limit aşımı revert", lambda:
+                  vault.functions.queueTrade(router.address, swap_calldata(MAX_DAILY + 1),
+                                             MAX_DAILY + 1).transact(A),
+                  "daily limit exceeded")
+    # kümülatif: 2 × %60 limit
+    vault.functions.queueTrade(router.address, swap_calldata(int(MAX_DAILY * 0.6)),
+                               int(MAX_DAILY * 0.6)).transact(A)
+    expect_revert("c2) kümülatif günlük limit aşımı revert", lambda:
+                  vault.functions.queueTrade(router.address, swap_calldata(int(MAX_DAILY * 0.6)),
+                                             int(MAX_DAILY * 0.6)).transact(A),
+                  "daily limit exceeded")
 
-    # 16 — Kullanıcı pause sırasında withdraw edebilir
-    def t16():
-        c = fresh()
-        c.vault.functions.pause().transact({"from": c.admin})
-        shares = c.vault.functions.balanceOf(c.user).call()
-        before = c.token.functions.balanceOf(c.user).call()
-        c.vault.functions.redeem(shares, c.user, c.user).transact({"from": c.user})
-        after = c.token.functions.balanceOf(c.user).call()
-        return after > before, f"çekilen={after-before}"
-    check("16. pause sırasında user withdraw çalışır", t16)
+    # ------------------------------------------------------------------
+    # d) timelock dolmadan execute → revert
+    # ------------------------------------------------------------------
+    expect_revert("d) timelock öncesi execute revert", lambda:
+                  vault.functions.executeTrade(0).transact(A), "timelock not elapsed")
 
-    # 17 — İki kullanıcı deposit/withdraw, share takibi doğru
-    def t17():
-        c = fresh()
-        c.vault.functions.deposit(5_000 * ONE, c.user2).transact({"from": c.user2})
-        s1 = c.vault.functions.balanceOf(c.user).call()
-        s2 = c.vault.functions.balanceOf(c.user2).call()
-        ta = c.vault.functions.totalAssets().call()
-        ts = c.vault.functions.totalSupply().call()
-        return s1 > 0 and s2 > 0 and ts == s1 + s2 and ta == 15_000 * ONE, \
-            f"ta={ta} ts={ts}"
-    check("17. iki kullanıcı share muhasebesi doğru", t17)
+    # ------------------------------------------------------------------
+    # e) guardian veto akışı
+    # ------------------------------------------------------------------
+    vault.functions.vetoTrade(0).transact(G)
+    w3.testing.timeTravel(w3.eth.get_block("latest").timestamp + TIMELOCK + 10)
+    expect_revert("e) veto edilen trade execute revert", lambda:
+                  vault.functions.executeTrade(0).transact(A), "vetoed")
 
-    # 18 — Günlük limit 24s sonra sıfırlanır
-    def t18():
-        c = fresh()
-        c.vault.functions.queueTrade(c.dex.address, 9_000 * ONE,
-                                     c.trade_data).transact({"from": c.agent})
-        c.mine(25 * 3600)
-        c.vault.functions.queueTrade(c.dex.address, 9_000 * ONE,
-                                     c.trade_data).transact({"from": c.agent})
-        return True, "ikinci gün queue başarılı"
-    check("18. günlük limit 24h sonra reset", t18)
+    # ------------------------------------------------------------------
+    # h) normal akış: kuyruk → timelock → execute başarılı
+    #    (kalan günlük limit: MAX_DAILY - 0.6*MAX_DAILY = 0.4*MAX_DAILY)
+    # ------------------------------------------------------------------
+    ok_notional = int(MAX_DAILY * 0.3)
+    vault.functions.queueTrade(router.address, swap_calldata(ok_notional), ok_notional).transact(A)
+    qid = vault.functions.queueLength().call() - 1
+    w3.testing.timeTravel(w3.eth.get_block("latest").timestamp + TIMELOCK + 10)
+    def exec_ok():
+        vault.functions.executeTrade(qid).transact(A)
+        t = vault.functions.tradeQueue(qid).call()
+        assert t[4] is True  # executed
+    expect_ok("h) whitelist'li trade timelock sonrası execute", exec_ok)
 
-    # 19 — Pause altında execute revert (queue'da bekleyen trade)
-    def t19():
-        c = fresh()
-        c.vault.functions.queueTrade(c.dex.address, 500 * ONE,
-                                     c.trade_data).transact({"from": c.agent})
-        c.mine(16 * 60)
-        c.vault.functions.pause().transact({"from": c.admin})
-        ok, _ = c.expect_revert(c.vault.functions.executeTrade, 0,
-                                sender=c.agent)
-        return ok, "paused revert"
-    check("19. paused execute -> revert", t19)
+    # ------------------------------------------------------------------
+    # f) pause sırasında agent işlemleri revert; kullanıcı çekimi çalışır
+    # ------------------------------------------------------------------
+    vault.functions.pause().transact(G)
+    expect_revert("f1) pause'da queueTrade revert", lambda:
+                  vault.functions.queueTrade(router.address, swap_calldata(1), 1).transact(A), "paused")
+    expect_revert("f2) pause'da recordSignal revert", lambda:
+                  vault.functions.recordSignal(0, "NEUTRAL", 5000).transact(A), "paused")
+    expect_revert("f3) pause'da executeTrade revert", lambda:
+                  vault.functions.executeTrade(qid).transact(A), "paused")
+    def withdraw_during_pause():
+        token.functions.mint(user, 500 * 10**6).transact(G)
+        token.functions.approve(vault.address, 500 * 10**6).transact(U)
+        vault.functions.deposit(500 * 10**6).transact(U)
+        sh = vault.functions.sharesOf(user).call()
+        vault.functions.withdraw(sh).transact(U)
+    expect_ok("f4) pause'da kullanıcı deposit/withdraw çalışır", withdraw_during_pause)
+    vault.functions.unpause().transact(G)
 
-    passed = sum(1 for r in RESULTS if r["passed"])
+    # ------------------------------------------------------------------
+    # k) agent owner fonksiyonlarını çağıramaz
+    # ------------------------------------------------------------------
+    expect_revert("k1) agent pause yapamaz", lambda:
+                  vault.functions.pause().transact(A), "not the owner")
+    expect_revert("k2) agent whitelist değiştiremez", lambda:
+                  vault.functions.setAllowedCall(attacker, real_selector, True).transact(A), "not the owner")
+    expect_revert("k3) agent agent'ı değiştiremez", lambda:
+                  vault.functions.setAgent(attacker).transact(A), "not the owner")
+
+    # ------------------------------------------------------------------
+    # m) recordSignal başarılı + SignalRecorded event'i (agent_loop akışı)
+    # ------------------------------------------------------------------
+    def signal_flow():
+        txh = vault.functions.recordSignal(39900000000000000, "NEUTRAL", 5100).transact(A)
+        rcpt = w3.eth.get_transaction_receipt(txh)
+        evts = vault.events.SignalRecorded().process_receipt(rcpt)
+        assert len(evts) == 1
+        assert evts[0].args.composite == 39900000000000000
+        assert evts[0].args.signal == "NEUTRAL"
+        assert evts[0].args.targetExposureBps == 5100
+    expect_ok("m) recordSignal başarılı + SignalRecorded event", signal_flow)
+
+    # ------------------------------------------------------------------
+    # Özet
+    # ------------------------------------------------------------------
+    passed = sum(1 for _, ok, _ in RESULTS if ok)
     total = len(RESULTS)
-    out = {"date": time.strftime("%Y-%m-%d"), "passed": passed,
-           "total": total, "results": RESULTS}
-    (Path(__file__).parent / "last_results.json").write_text(
-        json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"\nRESULTS: {passed}/{total} passed")
-    sys.exit(0 if passed == total else 1)
+    print(f"\n=== {passed}/{total} PASS ===")
+    # rapor için JSON bırak
+    (VAULT_DIR / "tests" / "last_results.json").write_text(json.dumps([
+        {"test": n, "pass": ok, "note": note} for n, ok, note in RESULTS
+    ], indent=2, ensure_ascii=False))
+    return 0 if passed == total else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
