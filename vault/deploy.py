@@ -1,92 +1,161 @@
 #!/usr/bin/env python3
-"""deploy.py — QuantVault'u Avalanche Fuji'ye dağıtır.
-
-Kullanım:
-    python vault/deploy.py
-
-Gereken env (.env): PRIVATE_KEY (deployer), AGENT_ADDRESS (agent EOA)
-Yazar: vault/deployment.json + vault/contract/QuantVault.abi.json
+# -*- coding: utf-8 -*-
 """
+QuantVault — Avalanche Fuji deploy scripti.
+
+Gerekli env:
+  PRIVATE_KEY        : deploy eden (owner/guardian) hesabın private key'i (0x...)
+                       ASLA koda gömülmez; sadece env'den okunur.
+İsteğe bağlı env:
+  RPC_URL            : varsayılan Fuji C-Chain RPC
+  AGENT_ADDRESS      : agent adresi (yoksa deploy edenle aynı)
+  ASSET_ADDRESS      : mevcut ERC-20 (ör. Fuji USDC). Yoksa TestToken deploy edilir.
+  TIMELOCK_SECONDS   : agent trade gecikmesi (varsayılan 900 = 15 dk)
+  MAX_DAILY_NOTIONAL : günlük üst sınır, asset en küçük birimi (varsayılan 10_000e6)
+
+Çalıştırma:
+  PRIVATE_KEY=0x... python3 deploy.py
+Çıktı: kontrat adresleri + QuantVault.abi.json (agent_loop.py bunu kullanır).
+"""
+from __future__ import annotations
 
 import json
 import os
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "engine"))
-from fetchers import load_key  # noqa: E402 — ortak key çözümleme
-
-from web3 import Web3  # noqa: E402
+VAULT_DIR = Path(__file__).resolve().parent
+CONTRACT_DIR = VAULT_DIR / "contract"
 
 FUJI_RPC = "https://api.avax-test.network/ext/bc/C/rpc"
-CHAIN_ID = 43113
+FUJI_CHAIN_ID = 43113
+SOLC_VERSION = "0.8.24"
 
 
-def compile_contract():
-    import solcx  # py-solc-x
-    solcx.install_solc("0.8.24")
-    solcx.set_solc_version("0.8.24")
-    src = (ROOT / "vault" / "contract" / "QuantVault.sol").read_text(encoding="utf-8")
-    std = solcx.compile_standard({
-        "language": "Solidity",
-        "sources": {"QuantVault.sol": {"content": src}},
-        "settings": {
-            "optimizer": {"enabled": True, "runs": 200},
-            "outputSelection": {"*": {"*": ["abi", "evm.bytecode"]}},
-        },
-    }, allow_paths=[ROOT])
-    out = std["contracts"]["QuantVault.sol"]["QuantVault"]
-    return out["abi"], out["evm"]["bytecode"]["object"]
+def compile_contracts() -> dict:
+    import solcx
+    try:
+        solcx.get_installed_solc_versions()
+        if SOLC_VERSION not in [str(v) for v in solcx.get_installed_solc_versions()]:
+            print(f"[..] solc {SOLC_VERSION} indiriliyor...")
+            solcx.install_solc(SOLC_VERSION)
+    except Exception:
+        solcx.install_solc(SOLC_VERSION)
+    return solcx.compile_files(
+        [str(CONTRACT_DIR / "QuantVault.sol"), str(CONTRACT_DIR / "TestToken.sol")],
+        output_values=["abi", "bin"],
+        solc_version=SOLC_VERSION,
+    )
 
 
-def main():
-    pk = load_key("PRIVATE_KEY")
-    agent_addr = load_key("AGENT_ADDRESS")
-    if not pk:
-        raise SystemExit("PRIVATE_KEY env/.env yok")
-    if not agent_addr:
-        raise SystemExit("AGENT_ADDRESS env/.env yok")
+def deploy(w3, compiled, name: str, args: list, deployer: str, privkey: str) -> tuple[str, object]:
+    key = next(k for k in compiled if k.endswith(f":{name}"))
+    contract = w3.eth.contract(abi=compiled[key]["abi"], bytecode=compiled[key]["bin"])
+    tx = contract.constructor(*args).build_transaction({
+        "from": deployer,
+        "nonce": w3.eth.get_transaction_count(deployer),
+        "chainId": FUJI_CHAIN_ID,
+        "gasPrice": w3.eth.gas_price,
+    })
+    signed = w3.eth.account.sign_transaction(tx, privkey)
+    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+    print(f"[..] {name} gönderildi: {tx_hash.hex()}")
+    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
+    if receipt.status != 1:
+        raise RuntimeError(f"{name} deploy revert: {tx_hash.hex()}")
+    addr = receipt.contractAddress
+    print(f"[OK] {name} @ {addr} (gas: {receipt.gasUsed})")
+    return addr, w3.eth.contract(address=addr, abi=compiled[key]["abi"])
 
-    w3 = Web3(Web3.HTTPProvider(FUJI_RPC))
+
+def main() -> int:
+    privkey = os.environ.get("PRIVATE_KEY", "").strip()
+    if not privkey:
+        print("HATA: PRIVATE_KEY env değişkeni gerekli (Fuji testnet key'i).", file=sys.stderr)
+        print("      Faucet: https://faucet.avax.network/ (Avalanche Fuji C-Chain)", file=sys.stderr)
+        return 1
+
+    from web3 import Web3
+    rpc = os.environ.get("RPC_URL", FUJI_RPC)
+    w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 30}))
     if not w3.is_connected():
-        raise SystemExit("Fuji RPC bağlanamadı")
-    acct = w3.eth.account.from_key(pk)
-    print(f"deployer: {acct.address}")
-    print(f"balance : {w3.from_wei(w3.eth.get_balance(acct.address), 'ether')} AVAX")
+        print(f"HATA: RPC'ye bağlanılamadı: {rpc}", file=sys.stderr)
+        return 1
 
-    print("derleniyor...")
-    abi, bytecode = compile_contract()
-    (ROOT / "vault" / "contract" / "QuantVault.abi.json").write_text(
-        json.dumps(abi), encoding="utf-8")
+    deployer = w3.eth.account.from_key(privkey).address
+    balance = w3.eth.get_balance(deployer)
+    print(f"[..] Deployer: {deployer} | bakiye: {w3.from_wei(balance, 'ether')} AVAX")
+    if balance == 0:
+        print("HATA: Bakiye 0. Önce faucet'tan test AVAX al: https://faucet.avax.network/", file=sys.stderr)
+        return 1
 
-    Vault = w3.eth.contract(abi=abi, bytecode=bytecode)
-    nonce = w3.eth.get_transaction_count(acct.address)
-    tx = Vault.constructor(acct.address, Web3.to_checksum_address(agent_addr)
-                           ).build_transaction({
-        "from": acct.address, "nonce": nonce,
-        "gas": 3_500_000, "maxFeePerGas": w3.to_wei(30, "gwei"),
-        "maxPriorityFeePerGas": w3.to_wei(2, "gwei"), "chainId": CHAIN_ID})
-    signed = w3.eth.account.sign_transaction(tx, pk)
+    agent = os.environ.get("AGENT_ADDRESS", deployer)
+    timelock = int(os.environ.get("TIMELOCK_SECONDS", "900"))
+    max_daily = int(os.environ.get("MAX_DAILY_NOTIONAL", str(10_000 * 10**6)))
+
+    print("[..] Derleniyor...")
+    compiled = compile_contracts()
+
+    # 1) Asset: varsa kullan, yoksa TestToken bas
+    asset_addr = os.environ.get("ASSET_ADDRESS", "").strip()
+    if not asset_addr:
+        asset_addr, token = deploy(w3, compiled, "TestToken", ["Test USDC", "tUSDC"], deployer, privkey)
+    else:
+        asset_addr = w3.to_checksum_address(asset_addr)
+        print(f"[..] Mevcut asset kullanılıyor: {asset_addr}")
+
+    # 2) MockRouter (demo trade hedefi — whitelist'lenecek)
+    router_addr, _ = deploy(w3, compiled, "MockRouter", [], deployer, privkey)
+
+    # 3) QuantVault
+    vault_addr, vault = deploy(
+        w3, compiled, "QuantVault",
+        [asset_addr, w3.to_checksum_address(agent), timelock, max_daily],
+        deployer, privkey,
+    )
+
+    # 4) Whitelist: MockRouter.swap(uint256)
+    from eth_utils import keccak
+    selector = keccak(text="swap(uint256)")[:4]
+    tx = vault.functions.setAllowedCall(
+        w3.to_checksum_address(router_addr), selector, True
+    ).build_transaction({
+        "from": deployer,
+        "nonce": w3.eth.get_transaction_count(deployer),
+        "chainId": FUJI_CHAIN_ID,
+        "gasPrice": w3.eth.gas_price,
+    })
+    signed = w3.eth.account.sign_transaction(tx, privkey)
     txh = w3.eth.send_raw_transaction(signed.raw_transaction)
-    print(f"deploy tx: {txh.hex()}")
-    rcpt = w3.eth.wait_for_transaction_receipt(txh, timeout=180)
-    if rcpt.status != 1:
-        raise SystemExit("deploy revert etti")
-    addr = rcpt.contractAddress
-    print(f"QuantVault: {addr}")
+    r = w3.eth.wait_for_transaction_receipt(txh, timeout=120)
+    assert r.status == 1, "setAllowedCall revert"
+    print(f"[OK] Whitelist: MockRouter.swap selector=0x{selector.hex()}")
 
-    dep = {
-        "network": "fuji", "chainId": CHAIN_ID, "rpc": FUJI_RPC,
-        "address": addr, "deployer": acct.address, "agent": agent_addr,
-        "deploy_tx": txh.hex(),
-        "explorer": f"https://testnet.snowtrace.io/address/{addr}",
-        "whitelist": [],  # deploy sonrası setWhitelisted ile doldurulur
+    # 5) ABI'yi agent_loop'un okuyacağı yere yaz
+    key = next(k for k in compiled if k.endswith(":QuantVault"))
+    (CONTRACT_DIR / "QuantVault.abi.json").write_text(json.dumps(compiled[key]["abi"]))
+
+    summary = {
+        "network": "avalanche-fuji",
+        "chainId": FUJI_CHAIN_ID,
+        "deployer_guardian": deployer,
+        "agent": agent,
+        "asset": asset_addr,
+        "router_whitelisted": router_addr,
+        "vault": vault_addr,
+        "timelock_seconds": timelock,
+        "max_daily_notional": max_daily,
     }
-    (ROOT / "vault" / "deployment.json").write_text(
-        json.dumps(dep, indent=2), encoding="utf-8")
-    print("deployment.json yazıldı")
+    (VAULT_DIR / "deployment.json").write_text(json.dumps(summary, indent=2))
+    print("\n=== DEPLOY TAMAM ===")
+    print(json.dumps(summary, indent=2))
+    print("\nAgent'ı çalıştırmak için:")
+    print(f"  export VAULT_ADDRESS={vault_addr}")
+    print(f"  export ROUTER_ADDRESS={router_addr}")
+    print(f"  export AGENT_PRIVATE_KEY=<agent hesabının key'i>")
+    print("  python3 agent_loop.py --once")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
