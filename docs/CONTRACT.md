@@ -34,7 +34,7 @@ Tüm bileşenler bu dosya üzerinden konuşur. Üreten: engine (Python). Tükete
     "bgeometrics": {"mvrv": null, "nupl": null, "sopr": null}
   },
   "errors": ["bgeometrics timeout — atlandı"]
-]
+}
 ```
 
 ## Kurallar

@@ -6,7 +6,7 @@
 
 Read the market. Compute the regime. Trade only what it is allowed to.
 
-[Live site](https://agyion-quant-agent.vercel.app/) · [Vault on Fuji](https://testnet.snowtrace.io/address/0xd4D6fAcC84fC230b605522Bd21b9f2E82A01Fa50) · [Security report](vault/SECURITY_TEST_REPORT.md)
+[Live site](https://agyionlabs.vercel.app) · [Vault on Fuji](https://testnet.snowtrace.io/address/0xd4D6fAcC84fC230b605522Bd21b9f2E82A01Fa50) · [Security report](vault/SECURITY_TEST_REPORT.md)
 
 </div>
 
