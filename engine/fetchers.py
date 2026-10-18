@@ -1,45 +1,31 @@
 """
-fetchers.py — Ücretsiz, key'siz public API'lerden ham metrik çekimi.
+fetchers.py — Ücretsiz veri kaynaklarından ham metrikleri çeker.
 
-Her fetcher izole try/except ile korunur: biri patlarsa diğerleri çalışmaya
-devam eder. Hiçbir fetcher exception fırlatmaz; hata durumunda kısmi veri +
-errors listesi döner. Timeout: 10 sn (BGeometrics büyük seriler için 15 sn).
+Her fetcher izole try/except ile çalışır: biri patlarsa kalanlar devam eder.
+Dönüş sözleşmesi:
+  fetch_all() -> (data: dict, errors: list[str])
+  data:  alan adı -> ham değer (float / list[float])
+  errors: insan-okunur Türkçe hata notları (snapshot.errors'a gider)
 
-Dönüş sözleşmesi: her fetch_* fonksiyonu (data: dict, errors: list[str]) döner.
-Erişilemeyen alanlar dict'te hiç yer almaz (None/mock YAZILMAZ).
+Seri dönenler (z-score için): `btc_vs_200dma_series` gibi geçmiş->bugün sıralı
+listeler. Tekil değerler düz float.
 """
 
-import csv
-import datetime
-import io
+import math
 import os
-import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
 
-TIMEOUT = 10
-_UA = {"User-Agent": "quant-agent/0.1 (hackathon)"}
-
+TIMEOUT = 12
+HEADERS = {"User-Agent": "quant-agent/0.1 (+local research)"}
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 
-def _safe_err(e):
-    """Hata metninde API key sızıntısını engelle: query param'a giden
-    key'ler (FRED, Etherscan) hata URL'sinde görünür -> maskeler."""
-    s = f"{type(e).__name__}: {e}"
-    for name in ("FRED_API_KEY", "ETHERSCAN_API_KEY", "COINGECKO_API_KEY",
-                 "BGEOMETRICS_API_KEY", "CQ_API_KEY"):
-        k = load_key(name)
-        if k:
-            s = s.replace(k, "***")
-    return s
-
-
 def load_key(name):
-    """API key çözümleme: 1) env var, 2) proje kökü .env (KEY=VALUE satırı).
-    Key'ler koda gömülmez; sandbox/cron'da env kalıcı olmadığı için .env
-    fallback'i zorunlu. Bulunamazsa None."""
+    """Ortak key çözümleme (v0.5): 1) env var, 2) proje kökü .env (KEY=VALUE).
+    Key hiçbir zaman koda gömülmez; dosyalar/endpoint'ler key'siz fallback'e sahip."""
     key = os.environ.get(name)
     if key:
         return key
@@ -53,479 +39,458 @@ def load_key(name):
     return None
 
 
-def _get(url, params=None, timeout=TIMEOUT, headers=None):
-    h = dict(_UA)
-    if headers:
-        h.update(headers)
-    r = requests.get(url, params=params, headers=h, timeout=timeout)
+def _safe_err(e):
+    """Hata metninden olası secret sızıntısını maskeler (key'ler asla
+    snapshot/errors içinde görünmez)."""
+    msg = str(e)
+    for k in ("CQ_API_KEY", "FRED_API_KEY", "BGEOMETRICS_API_KEY",
+              "COINGECKO_API_KEY", "ETHERSCAN_API_KEY", "ANTHROPIC_API_KEY"):
+        v = load_key(k)
+        if v and v in msg:
+            msg = msg.replace(v, "***")
+    return msg
+
+
+# ------------------------------------------------------------- CoinGecko
+def fetch_coingecko(days=365):
+    """BTC/ETH/AVAX fiyatları + BTC 200g ortalama sapması ve serisi.
+
+    market_chart?days=365 günlük nokta döner; seriden 200DMA ve
+    (fiyat/200DMA - 1) oran serisi türetilir.
+    """
+    out = {}
+    r = requests.get(
+        "https://api.coingecko.com/api/v3/simple/price",
+        params={"ids": "bitcoin,ethereum,avalanche-2", "vs_currencies": "usd",
+                "include_24hr_change": "true"},
+        headers=HEADERS, timeout=TIMEOUT)
+    r.raise_for_status()
+    j = r.json()
+    out["btc_price"] = float(j["bitcoin"]["usd"])
+    out["eth_price"] = float(j["ethereum"]["usd"])
+    out["avax_price"] = float(j["avalanche-2"]["usd"])
+    out["btc_24h_change"] = float(j["bitcoin"].get("usd_24h_change", 0.0)) / 100.0
+    out["eth_24h_change"] = float(j["ethereum"].get("usd_24h_change", 0.0)) / 100.0
+    out["avax_24h_change"] = float(j["avalanche-2"].get("usd_24h_change", 0.0)) / 100.0
+
+    r = requests.get(
+        "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
+        params={"vs_currency": "usd", "days": str(days), "interval": "daily"},
+        headers=HEADERS, timeout=TIMEOUT)
+    r.raise_for_status()
+    prices = [p[1] for p in r.json()["prices"]]
+    if len(prices) < 200:
+        raise ValueError(f"market_chart serisi kısa: {len(prices)} nokta")
+    dma200 = sum(prices[-200:]) / 200.0
+    ratio_series = []
+    for i in range(199, len(prices)):
+        ma = sum(prices[i - 199:i + 1]) / 200.0
+        ratio_series.append(prices[i] / ma - 1.0)
+    out["btc_200dma"] = dma200
+    out["btc_price_vs_200dma"] = out["btc_price"] / dma200 - 1.0
+    out["btc_vs_200dma_series"] = ratio_series
+    return out
+
+
+# ------------------------------------------------------------------- OKX
+def _okx_get(path, params):
+    r = requests.get(f"https://www.okx.com{path}", params=params,
+                     headers=HEADERS, timeout=TIMEOUT)
+    r.raise_for_status()
+    j = r.json()
+    if str(j.get("code")) != "0":
+        raise ValueError(f"OKX code={j.get('code')} msg={j.get('msg')}")
+    return j["data"]
+
+
+def _okx_funding(inst):
+    """Güncel funding yoksa (sınırlar içi) bir sonraki tahmini funding'i kullan."""
+    d = _okx_get("/api/v5/public/funding-rate", {"instId": inst})[0]
+    cur = d.get("fundingRate")
+    if cur not in (None, ""):
+        return float(cur)
+    nxt = d.get("nextFundingRate")
+    if nxt not in (None, ""):
+        return float(nxt)
+    raise ValueError(f"{inst}: fundingRate/nextFundingRate boş")
+
+
+def fetch_okx():
+    """AVAX-USDT-SWAP funding + OI değişimi, BTC-USDT-SWAP funding."""
+    out = {}
+    out["avax_funding"] = _okx_funding("AVAX-USDT-SWAP")
+    out["btc_funding"] = _okx_funding("BTC-USDT-SWAP")
+
+    d = _okx_get("/api/v5/public/open-interest",
+                 {"instType": "SWAP", "instId": "AVAX-USDT-SWAP"})[0]
+    out["avax_oi_contracts"] = float(d["oi"])
+
+    # 24s önceki OI: funding-rate-history yok; OI history endpoint'i yok.
+    # Yaklaşık: SWap candles'dan OI türetilemez -> oi_change için
+    # 24s önceki snapshot'ı local cache'den oku (data/oi_cache.json).
+    out["avax_oi_prev"] = None  # cache yoksa None kalır (bileşen düşer)
+    return out
+
+
+def fetch_okx_oi_change(cache_path):
+    """OI 24s değişimini yerel cache ile hesaplar: her koşuda güncel OI'yi
+    yazar; 20-28 saat arası eski kayıt varsa onunla karşılaştırır."""
+    import json
+
+    now = datetime.now(timezone.utc)
+    cache = {"history": []}
+    if cache_path.exists():
+        try:
+            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            cache = {"history": []}
+    return cache, now  # hesap fetch_all içinde (güncel OI bilinince)
+
+
+# -------------------------------------------------------------- DefiLlama
+def fetch_defillama():
+    """Avalanche TVL 30g momentumu + AVAX stablecoin mcap 30g momentumu."""
+    out = {}
+    r = requests.get("https://api.llama.fi/v2/historicalChainTvl/Avalanche",
+                     headers=HEADERS, timeout=TIMEOUT)
+    r.raise_for_status()
+    series = [(int(p["date"]), float(p["tvl"])) for p in r.json()]
+    if len(series) < 31:
+        raise ValueError(f"DefiLlama TVL serisi kısa: {len(series)}")
+    out["avax_tvl_usd"] = series[-1][1]
+    out["avax_tvl_prev_usd"] = series[-31][1]
+    out["avax_tvl_momentum_30d"] = series[-1][1] / series[-31][1] - 1.0
+
+    r = requests.get("https://stablecoins.llama.fi/stablecoincharts/Avalanche",
+                     headers=HEADERS, timeout=TIMEOUT)
+    r.raise_for_status()
+    pts = [(int(p["date"]), float(p["totalCirculatingUSD"]["peggedUSD"]))
+           for p in r.json()]
+    if len(pts) < 31:
+        raise ValueError(f"DefiLlama stable serisi kısa: {len(pts)}")
+    out["stable_mcap_usd"] = pts[-1][1]
+    out["stable_mcap_prev_usd"] = pts[-31][1]
+    out["stablecoin_mcap_momentum"] = pts[-1][1] / pts[-31][1] - 1.0
+    return out
+
+
+# ------------------------------------------------------------ BGeometrics
+def _bg_get(path, params=None, key=None):
+    """BGeometrics free API. BGEOMETRICS_API_KEY varsa Authorization: Bearer
+    header'ı eklenir (yoksa key'siz public endpoint davranışı)."""
+    headers = dict(HEADERS)
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    r = requests.get(f"https://bitcoin-data.com{path}", params=params or {},
+                     headers=headers, timeout=TIMEOUT)
     r.raise_for_status()
     return r.json()
 
 
-# ---------------------------------------------------------------- CoinGecko
-def _cg_headers():
-    """CoinGecko demo key (varsa): x-cg-demo-api-key header'ı."""
-    key = load_key("COINGECKO_API_KEY")
-    return {"x-cg-demo-api-key": key} if key else None
-
-
-def fetch_coingecko():
-    """CoinGecko demo API (COINGECKO_API_KEY varsa key'li, yoksa key'siz).
-
-    - simple/price: BTC/ETH/AVAX güncel fiyat + 24s değişim
-    - market_chart (BTC, 365g): 200DMA hesabı + tarihsel ratio serisi
-      Rate limit / hata durumunda seri atlanır, simple/price ile idare edilir.
-    """
-    data, errors = {}, []
-    base = "https://api.coingecko.com/api/v3"
-    hdr = _cg_headers()
-    try:
-        j = _get(f"{base}/simple/price", params={
-            "ids": "bitcoin,ethereum,avalanche-2",
-            "vs_currencies": "usd",
-            "include_24hr_change": "true",
-        }, headers=hdr)
-        data["btc_price"] = j["bitcoin"]["usd"]
-        data["eth_price"] = j["ethereum"]["usd"]
-        data["avax_price"] = j["avalanche-2"]["usd"]
-        data["btc_24h_change"] = j["bitcoin"].get("usd_24h_change")
-        data["eth_24h_change"] = j["ethereum"].get("usd_24h_change")
-        data["avax_24h_change"] = j["avalanche-2"].get("usd_24h_change")
-    except Exception as e:
-        errors.append(f"coingecko simple/price başarısız: {type(e).__name__}: {e}")
-        return data, errors  # fiyat yoksa market_chart'ın da anlamı sınırlı
-
-    try:
-        j = _get(f"{base}/coins/bitcoin/market_chart", params={
-            "vs_currency": "usd", "days": "365", "interval": "daily",
-        }, headers=hdr)
-        prices = [p[1] for p in j.get("prices", [])]
-        if len(prices) >= 200:
-            dma200 = sum(prices[-200:]) / 200.0
-            # Tarihsel (fiyat/200DMA - 1) serisi: z-score normalizasyonu için.
-            # Her gün için o ana kadarki 200 günlük ortalama kullanılır.
-            ratio_series = []
-            for i in range(199, len(prices)):
-                ma = sum(prices[i - 199:i + 1]) / 200.0
-                ratio_series.append(prices[i] / ma - 1.0)
-            data["btc_200dma"] = dma200
-            data["btc_price_vs_200dma"] = prices[-1] / dma200 - 1.0
-            data["btc_vs_200dma_series"] = ratio_series
+def _bg_series(payload):
+    """BGeometrics yanıtını (tarih, değer) listesine çevirir; hem list-of-lists
+    hem list-of-dicts formatını tolere eder."""
+    series = []
+    for row in payload:
+        if isinstance(row, dict):
+            d, v = row.get("d") or row.get("date"), row.get("v") or row.get("value")
         else:
-            errors.append(f"coingecko market_chart yetersiz veri ({len(prices)} nokta)")
-    except Exception as e:
-        errors.append(f"coingecko market_chart başarısız (simple/price ile idare edilecek): "
-                      f"{type(e).__name__}: {e}")
-    return data, errors
-
-
-def fetch_coingecko_market():
-    """CoinGecko /global + /coins/markets: alt_rejim hazırlığı (bileşen değil).
-
-    - btc_dominance: /global → market_cap_percentage.btc
-    - top/worst 5 performer: /coins/markets top-100, 24h ve 7d getiriler
-      (newsletter performer tablosu verisi; snapshot metrics_raw'a gider).
-    Sandbox'ta host kapalı olabilir -> graceful skip."""
-    data, errors = {}, []
-    base = "https://api.coingecko.com/api/v3"
-    hdr = _cg_headers()
-    try:
-        j = _get(f"{base}/global", headers=hdr)
-        data["btc_dominance"] = float(j["data"]["market_cap_percentage"]["btc"])
-    except Exception as e:
-        errors.append(f"coingecko /global erişilemedi: {type(e).__name__}: {e}")
-    try:
-        j = _get(f"{base}/coins/markets", params={
-            "vs_currency": "usd", "order": "market_cap_desc",
-            "per_page": "100", "page": "1",
-            "price_change_percentage": "24h,7d",
-        }, headers=hdr, timeout=15)
-        if not isinstance(j, list) or not j:
-            raise ValueError("boş yanıt")
-        rows = [{"symbol": c["symbol"].upper(), "name": c["name"],
-                 "chg_24h": c.get("price_change_percentage_24h"),
-                 "chg_7d": c.get("price_change_percentage_7d_in_currency")}
-                for c in j]
-        valid = [r for r in rows if r["chg_24h"] is not None]
-        valid.sort(key=lambda r: r["chg_24h"], reverse=True)
-        data["cg_top_performers"] = valid[:5]
-        data["cg_worst_performers"] = valid[-5:][::-1]
-    except Exception as e:
-        errors.append(f"coingecko /coins/markets erişilemedi: {type(e).__name__}: {e}")
-    return data, errors
-
-
-# ---------------------------------------------------------------------- OKX
-def _okx_funding(inst):
-    j = _get("https://www.okx.com/api/v5/public/funding-rate", params={"instId": inst})
-    return float(j["data"][0]["fundingRate"])
-
-
-def _okx_funding_prev(inst):
-    """Funding 8 saatte bir settle olur -> 3 kayıt öncesi ~24 saat öncesi."""
-    j = _get("https://www.okx.com/api/v5/public/funding-rate-history",
-             params={"instId": inst, "limit": "10"})
-    rows = j.get("data", [])
-    if len(rows) >= 4:
-        return float(rows[3]["fundingRate"])
-    if rows:
-        return float(rows[-1]["fundingRate"])
-    raise ValueError("funding-rate-history boş")
-
-
-def fetch_okx():
-    """OKX v5 public: AVAX/BTC perpetual funding (şimdi + 24s önce) ve AVAX OI."""
-    data, errors = {}, []
-    for key, inst in (("avax", "AVAX-USDT-SWAP"), ("btc", "BTC-USDT-SWAP")):
+            d, v = row[0], row[1]
+        if v is None:
+            continue
         try:
-            data[f"{key}_funding"] = _okx_funding(inst)
-        except Exception as e:
-            errors.append(f"okx funding {inst} başarısız: {type(e).__name__}: {e}")
-        try:
-            data[f"{key}_funding_24h_ago"] = _okx_funding_prev(inst)
-        except Exception as e:
-            errors.append(f"okx funding-history {inst} başarısız: {type(e).__name__}: {e}")
-    try:
-        j = _get("https://www.okx.com/api/v5/public/open-interest",
-                 params={"instType": "SWAP", "uly": "AVAX-USDT"})
-        rows = j.get("data", [])
-        # Tüm AVAX-USDT swap'ların USD cinsinden OI toplamı
-        data["avax_oi_usd"] = sum(float(r.get("oiUsd") or 0) for r in rows) or None
-        if data["avax_oi_usd"] is None:
-            raise ValueError("open-interest yanıtı boş")
-    except Exception as e:
-        errors.append(f"okx open-interest başarısız: {type(e).__name__}: {e}")
-    # 24s önceki OI: OKX rubik günlük istatistik endpoint'i (public)
-    try:
-        j = _get("https://www.okx.com/api/v5/rubik/stat/contracts/open-interest-volume",
-                 params={"ccy": "AVAX", "period": "1D"})
-        rows = j.get("data", [])
-        if len(rows) >= 2:
-            data["avax_oi_usd_prev"] = float(rows[-2][1])  # [ts, oi, vol]
-    except Exception as e:
-        errors.append(f"okx OI geçmişi (rubik) başarısız: {type(e).__name__}: {e}")
-    return data, errors
+            series.append((str(d), float(v)))
+        except (TypeError, ValueError):
+            continue
+    series.sort(key=lambda t: t[0])
+    return series
 
 
-# ---------------------------------------------------------------- DefiLlama
-def fetch_defillama():
-    """DefiLlama (key'siz): Avalanche TVL serisi + stablecoin mcap serisi (30g momentum)."""
-    data, errors = {}, []
-    try:
-        j = _get("https://api.llama.fi/v2/historicalChainTvl/Avalanche")
-        if len(j) >= 31:
-            data["avax_tvl_now"] = j[-1]["tvl"]
-            data["avax_tvl_30d_ago"] = j[-31]["tvl"]
-            data["avax_tvl_date"] = j[-1]["date"]
-        else:
-            raise ValueError(f"yetersiz TVL serisi ({len(j)} nokta)")
-    except Exception as e:
-        errors.append(f"defillama Avalanche TVL başarısız: {type(e).__name__}: {e}")
-    try:
-        j = _get("https://stablecoins.llama.fi/stablecoincharts/Avalanche")
-        # totalCirculatingUSD.peggedUSD = zincirdeki USD stablecoin toplamı
-        def mcap(row):
-            return (row.get("totalCirculatingUSD") or {}).get("peggedUSD")
-        if len(j) >= 31 and mcap(j[-1]) and mcap(j[-31]):
-            data["stable_mcap_now"] = mcap(j[-1])
-            data["stable_mcap_30d_ago"] = mcap(j[-31])
-        else:
-            raise ValueError(f"yetersiz stablecoin serisi ({len(j)} nokta)")
-    except Exception as e:
-        errors.append(f"defillama stablecoin mcap başarısız: {type(e).__name__}: {e}")
-    return data, errors
-
-
-# --------------------------------------------------------------- BGeometrics
 def fetch_bgeometrics():
-    """BGeometrics REST API (api.bgeometrics.com/v1, günlük).
-
-    BGEOMETRICS_API_KEY varsa Authorization: Bearer ile gönderilir (doküman:
-    ?token= veya Bearer) — kota rahatlar; yoksa ücretsiz katman (8 istek/saat,
-    veri ~7 gün gecikmeli; 'date' alanı bunu gösterir).
-    Erişilemezse ilgili metrik null kalır ve errors'a yazılır (mock YOK).
-    """
-    data, errors = {}, []
+    """BTC MVRV, NUPL, SOPR (tekil + 365g seri — z-score için)."""
+    out = {}
     bg_key = load_key("BGEOMETRICS_API_KEY")
-    hdr = {"Authorization": f"Bearer {bg_key}"} if bg_key else None
-    # profit-loss = "% of BTC supply currently in profit" (WEIGHTING.md v1
-    # supply_profit bileşeni). Ücretsiz kota: 8 istek/saat — 4. metrik ekli.
-    for metric in ("mvrv", "nupl", "sopr", "profit-loss"):
-        try:
-            if not bg_key:
-                time.sleep(1.5)  # key'siz katman: istekleri seyrelt
-            j = _get(f"https://api.bgeometrics.com/v1/{metric}", timeout=15,
-                     headers=hdr)
-            # 429 alınırsa retry YAPILMAZ: limit saatliktir, retry kotayı boşa yakar.
-            if not isinstance(j, list) or not j:
-                raise ValueError("boş yanıt")
-            # Alan adı endpoint adıyla birebir aynı olmayabilir (ör.
-            # profit-loss -> "profit_loss"): "d" (tarih) dışındaki ilk alan.
-            def val(row):
-                if row.get(metric) is not None:
-                    return row[metric]
-                for k, v in row.items():
-                    if k != "d" and v is not None:
-                        return v
-                return None
-            series = [v for v in (val(row) for row in j) if v is not None]
-            if not series:
-                raise ValueError("metrik alanı boş")
-            data[metric] = {
-                "value": series[-1],
-                "date": j[-1]["d"],
-                "series": series[-365:],  # son 1 yıl z-score için yeterli
-            }
-        except Exception as e:
-            errors.append(f"bgeometrics {metric} erişilemedi: {type(e).__name__}: {e}")
-    if not data:
-        errors.append("bgeometrics erişilemedi — tüm on-chain metrikler null")
-    return data, errors
-
-
-# ------------------------------------------------------------- Fear & Greed
-def fetch_fear_greed():
-    """Alternative.me Fear & Greed Index (key'siz): 0-100 güncel değer +
-    30g seri (z-score yedeği). Sandbox ağında host kapalı olabilir -> skip."""
-    data, errors = {}, []
-    try:
-        j = _get("https://api.alternative.me/fng/", params={"limit": "30"})
-        rows = j.get("data", [])
-        if not rows:
-            raise ValueError("boş yanıt")
-        # newest-first: [0] güncel değer
-        data["fear_greed"] = int(rows[0]["value"])
-        data["fear_greed_series"] = [int(r["value"]) for r in reversed(rows)]
-        data["fear_greed_label"] = rows[0].get("value_classification")
-    except Exception as e:
-        errors.append(f"alternative.me fear&greed erişilemedi: {type(e).__name__}: {e}")
-    return data, errors
-
-
-# ------------------------------------------------------------- mempool.space
-def fetch_hash_ribbon():
-    """mempool.space public API: hash ribbon basit versiyonu.
-
-    Hashrate 30g MA vs 60g MA kesişimi: 30g MA 60g MA'nın üstüne çıkıyorsa
-    madenci kapitülasyonu bitiyor/toparlanma = bullish uzun-vade.
-    (1w penceresi 60g MA için yetersiz -> 3m günlük seri çekilir.)
-    Ayrıca difficulty serisi teyit olarak denenir. Host kapalıysa skip."""
-    data, errors = {}, []
-    try:
-        j = _get("https://mempool.space/api/v1/mining/hashrate/3m")
-        # API yanıt anahtarı sürüme göre "hashrates" (güncel) veya "hashes"
-        hashes = j.get("hashrates") or j.get("hashes") or []
-        series = [float(h["avgHashrate"]) for h in hashes
-                  if h.get("avgHashrate") is not None]
-        if len(series) >= 60:
-            ma30 = sum(series[-30:]) / 30.0
-            ma60 = sum(series[-60:]) / 60.0
-            data["hashrate_ma30"] = ma30
-            data["hashrate_ma60"] = ma60
-            data["hash_ribbon_rel"] = ma30 / ma60 - 1.0
+    for name, path in (("mvrv", "/v1/mvrv"), ("nupl", "/v1/nupl"),
+                       ("sopr", "/v1/sopr")):
+        series = _bg_series(_bg_get(path, key=bg_key))
+        if not series:
+            raise ValueError(f"bgeometrics {path}: boş seri")
+        out[f"btc_{name}"] = series[-1][1]
+        out[f"btc_{name}_series"] = [v for _, v in series[-365:]]
+    # supply in profit: /v1/profit-loss (amount + relative); relative = oran.
+    pl = _bg_get("/v1/profit-loss", key=bg_key)
+    if isinstance(pl, dict):
+        # format tahmini: {"supply_profit": ..., "supply_loss": ...} veya seri
+        for k in ("relative", "supply_profit_rel", "in_profit_rel"):
+            if pl.get(k) is not None:
+                out["btc_supply_profit"] = float(pl[k])
+                break
         else:
-            raise ValueError(f"yetersiz hashrate serisi ({len(series)} nokta)")
-    except Exception as e:
-        errors.append(f"mempool.space hashrate erişilemedi: {type(e).__name__}: {e}")
-    try:
-        j = _get("https://mempool.space/api/v1/mining/difficulty-adjustments/1m")
-        if isinstance(j, list) and len(j) >= 2:
-            # [timestamp, height, difficulty, change] — son ayar değişimi %
-            data["difficulty_last_change_pct"] = float(j[-1][3])
-    except Exception as e:
-        errors.append(f"mempool.space difficulty erişilemedi (teyit atlandı): "
-                      f"{type(e).__name__}: {e}")
-    return data, errors
+            total = (pl.get("supply_profit") or 0) + (pl.get("supply_loss") or 0)
+            if total:
+                out["btc_supply_profit"] = float(pl["supply_profit"]) / float(total)
+    elif isinstance(pl, list):
+        series = _bg_series(pl)
+        if series:
+            out["btc_supply_profit"] = series[-1][1]
+    return out
 
 
-# ------------------------------------------------------------------ Binance
-def _slope(series):
-    """Son N noktanın en küçük kareler eğimi (nokta başına birim)."""
-    n = len(series)
-    if n < 2:
-        return None
-    xs = list(range(n))
-    mx = sum(xs) / n
-    my = sum(series) / n
-    den = sum((x - mx) ** 2 for x in xs)
-    if den == 0:
-        return None
-    return sum((x - mx) * (y - my) for x, y in zip(xs, series)) / den
-
-
-def fetch_binance_taker():
-    """Binance USDT-M futures taker long/short ratio (key'siz, günlük).
-
-    longShortRatio > 1: taker alıcıları baskın. 7g eğim pozitifse agresif
-    alım eğilimi artıyor = bullish kısa-vade. Host kapalıysa skip."""
-    data, errors = {}, []
-    try:
-        j = _get("https://fapi.binance.com/futures/data/takerlongshortRatio",
-                 params={"symbol": "BTCUSDT", "period": "1d", "limit": "30"})
-        if not isinstance(j, list) or len(j) < 8:
-            raise ValueError(f"yetersiz seri ({len(j) if isinstance(j, list) else '?'} nokta)")
-        series = [float(r["longShortRatio"]) for r in j]  # eski->yeni
-        data["btc_taker_ls_ratio"] = series[-1]
-        data["btc_taker_ls_series"] = series
-        s = _slope(series[-7:])
-        if s is not None:
-            data["btc_taker_slope_7d"] = s
-    except Exception as e:
-        errors.append(f"binance taker long/short erişilemedi: {type(e).__name__}: {e}")
-    return data, errors
-
-
-# ------------------------------------------------------ OKX spot-perp gap
-def fetch_okx_spot_perp():
-    """OKX public ticker: BTC-USDT spot vs BTC-USDT-SWAP perp fiyat farkı.
-
-    gap = (swap - spot) / spot. Pozitif gap = perp primi = kalabalık long
-    talebi (aşırısı ısınma). Host kapalıysa skip."""
-    data, errors = {}, []
-    try:
-        js = _get("https://www.okx.com/api/v5/market/ticker",
-                  params={"instId": "BTC-USDT"})
-        jp = _get("https://www.okx.com/api/v5/market/ticker",
-                  params={"instId": "BTC-USDT-SWAP"})
-        spot = float(js["data"][0]["last"])
-        swap = float(jp["data"][0]["last"])
-        if spot <= 0:
-            raise ValueError("spot fiyat 0")
-        data["btc_spot_okx"] = spot
-        data["btc_swap_okx"] = swap
-        data["spot_perp_gap"] = (swap - spot) / spot
-    except Exception as e:
-        errors.append(f"okx spot-perp gap erişilemedi: {type(e).__name__}: {e}")
-    return data, errors
-
-
-# -------------------------------------------------------------- CoinMetrics
-def fetch_coinmetrics():
-    """CoinMetrics community API (anahtarsız): btc+eth 400g günlük seri.
-
-    Community katmanında CapRealUSD ve FeeTotUSD 403 (test edildi) — realized
-    cap türevleri buradan ÜRETİLEMEZ (CQ capitalization kullanılır). Açık
-    metrikler: CapMrktCurUSD, AdrActCnt, TxCnt. Tek istek, pagination yok
-    (page_size=10000). ETH/BTC rotasyon oranları (aktif adres, tx) için
-    tarih-hizalı oran serileri üretir. Host kapalıysa skip."""
-    data, errors = {}, []
-    try:
-        start = (datetime.date.today() - datetime.timedelta(days=400)).isoformat()
-        j = _get("https://community-api.coinmetrics.io/v4/timeseries/asset-metrics",
-                 params={"assets": "btc,eth",
-                         "metrics": "CapMrktCurUSD,AdrActCnt,TxCnt",
-                         "start_time": start, "frequency": "1d",
-                         "page_size": "10000"},
-                 timeout=20)
-        rows = j.get("data", [])
-        if not rows:
-            raise ValueError("boş yanıt")
-        per = {}
-        for asset in ("btc", "eth"):
-            rs = [r for r in rows if r.get("asset") == asset]
-            rs.sort(key=lambda r: r["time"])
-            per[asset] = rs
-        nb, ne = len(per["btc"]), len(per["eth"])
-        if nb < 31 or ne < 31:
-            raise ValueError(f"yetersiz seri (btc={nb}, eth={ne})")
-        # Tarih hizalama: iki varlıkta da ortak olan günler
-        def field(rows_):  # zaman -> ölçümler
-            return {r["time"]: r for r in rows_}
-        mb, me = field(per["btc"]), field(per["eth"])
-        common = sorted(set(mb) & set(me))
-        def col(m, k, days):
-            return [float(m[t][k]) for t in days
-                    if m[t].get(k) is not None]
-        addr_ratio, tx_ratio = [], []
-        for t in common:
-            b, e = mb[t], me[t]
-            if b.get("AdrActCnt") and e.get("AdrActCnt") and float(b["AdrActCnt"]) > 0:
-                addr_ratio.append(float(e["AdrActCnt"]) / float(b["AdrActCnt"]))
-            if b.get("TxCnt") and e.get("TxCnt") and float(b["TxCnt"]) > 0:
-                tx_ratio.append(float(e["TxCnt"]) / float(b["TxCnt"]))
-        if len(addr_ratio) >= 30:
-            data["cm_eth_btc_addr_ratio_series"] = addr_ratio
-        if len(tx_ratio) >= 30:
-            data["cm_eth_btc_tx_ratio_series"] = tx_ratio
-        if not data:
-            raise ValueError("hizalanmış oran serisi üretilemedi")
-    except Exception as e:
-        errors.append(f"coinmetrics community erişilemedi: {type(e).__name__}: {e}")
-    return data, errors
-
-
-# --------------------------------------------------------------------- FRED
-FRED_SERIES = ("DTWEXBGS", "VIXCLS", "DGS10")  # dolar endeksi, VIX, 10Y
-
-
-def _fred_series_api(sid, key):
-    """Resmi FRED API (key'li): /fred/series/observations. eski->yeni."""
-    j = _get("https://api.stlouisfed.org/fred/series/observations",
-             params={"series_id": sid, "api_key": key, "file_type": "json",
-                     "sort_order": "asc"},
-             timeout=TIMEOUT)
-    return [float(o["value"]) for o in j.get("observations", [])
-            if o.get("value") not in (None, ".")]
-
-
-def _fred_series_csv(sid):
-    """fredgraph.csv (anahtarsız fallback): tarih,değer; '.' eksik. eski->yeni."""
-    r = requests.get(f"https://fred.stlouisfed.org/graph/fredgraph.csv",
-                     params={"id": sid}, headers=_UA, timeout=TIMEOUT)
+# --------------------------------------------------------- alternative.me
+def fetch_fear_greed():
+    """alternative.me Fear & Greed Index (0-100)."""
+    r = requests.get("https://api.alternative.me/fng/", params={"limit": "1"},
+                     headers=HEADERS, timeout=TIMEOUT)
     r.raise_for_status()
-    vals = []
-    for row in csv.DictReader(io.StringIO(r.text)):
-        v = row.get(sid)
-        if v and v != ".":
-            vals.append(float(v))
-    return vals
+    d = r.json()["data"][0]
+    return {"fear_greed": float(d["value"]),
+            "fear_greed_label": d.get("value_classification", "")}
+
+
+# ----------------------------------------------------------- mempool.space
+def fetch_mempool_hashrate():
+    """Hashrate MA30/MA60 (hash ribbon yaklaşımı).
+
+    /api/v1/mining/hashrate/3m haftalık noktalar döner; MA30 ~ son 4-5 nokta,
+    MA60 ~ son 8-9 nokta ortalamasıyla yakınsanır.
+    """
+    r = requests.get("https://mempool.space/api/v1/mining/hashrate/3m",
+                     headers=HEADERS, timeout=TIMEOUT)
+    r.raise_for_status()
+    j = r.json()
+    rates = [float(p["avgHashrate"]) for p in j.get("hashrates", [])
+             if p.get("avgHashrate") is not None]
+    if len(rates) < 9:
+        raise ValueError(f"mempool hashrate serisi kısa: {len(rates)}")
+    ma30 = sum(rates[-4:]) / 4.0
+    ma60 = sum(rates[-9:]) / 9.0
+    return {"btc_hash_ma30": ma30, "btc_hash_ma60": ma60,
+            "btc_hash_ribbon": ma30 / ma60 - 1.0 if ma60 else None}
+
+
+# --------------------------------------------------------------- Binance
+def fetch_binance_taker():
+    """BTCUSDT taker long/short ratio 7g eğimi (günlük noktalar, en küçük
+    kareler slope). /futures/data/takerlongshortRatio (public)."""
+    r = requests.get(
+        "https://fapi.binance.com/futures/data/takerlongshortRatio",
+        params={"symbol": "BTCUSDT", "period": "1d", "limit": "7"},
+        headers=HEADERS, timeout=TIMEOUT)
+    r.raise_for_status()
+    rows = r.json()
+    vals = [float(x["buySellRatio"]) for x in rows if x.get("buySellRatio")]
+    if len(vals) < 5:
+        raise ValueError(f"binance taker serisi kısa: {len(vals)}")
+    n = len(vals)
+    xs = list(range(n))
+    xm, ym = sum(xs) / n, sum(vals) / n
+    denom = sum((x - xm) ** 2 for x in xs)
+    slope = sum((x - xm) * (y - ym) for x, y in zip(xs, vals)) / denom
+    return {"binance_taker_slope": slope,
+            "binance_taker_ratio_latest": vals[-1]}
+
+
+# ------------------------------------------------------------------- FRED
+def _fred_series(sid, days=45):
+    """FRED günlük serisi (son N gün). FRED_API_KEY varsa resmi API
+    (api.stlouisfed.org/fred/series/observations), yoksa key'siz
+    fredgraph.csv fallback. (tarih, değer) listesi döner; '.' = eksik atlanır."""
+    key = load_key("FRED_API_KEY")
+    if key:
+        r = requests.get(
+            "https://api.stlouisfed.org/fred/series/observations",
+            params={"series_id": sid, "api_key": key,
+                    "file_type": "json",
+                    "observation_start": (datetime.now(timezone.utc)
+                                          - timedelta(days=days)).strftime("%Y-%m-%d")},
+            headers=HEADERS, timeout=TIMEOUT)
+        r.raise_for_status()
+        obs = [(o["date"], o["value"]) for o in r.json().get("observations", [])]
+    else:
+        r = requests.get(f"https://fred.stlouisfed.org/graph/fredgraph.csv",
+                         params={"id": sid}, headers=HEADERS, timeout=TIMEOUT)
+        r.raise_for_status()
+        lines = [l for l in r.text.strip().splitlines() if "," in l]
+        obs = [tuple(l.split(",", 1)) for l in lines[1:]][-days:]
+    series = []
+    for d, v in obs:
+        try:
+            series.append((d, float(v)))
+        except (TypeError, ValueError):
+            continue
+    if len(series) < 22:
+        raise ValueError(f"FRED {sid} serisi kısa: {len(series)}")
+    return series
 
 
 def fetch_fred():
-    """FRED: haftalık makro rejim serileri. FRED_API_KEY varsa resmi API
-    (api.stlouisfed.org), yoksa anahtarsız fredgraph.csv fallback.
-
-    30 gözlemlik değişim hesaplanır (günlük seriler ~ takvim 6 hafta):
-      DTWEXBGS: geniş dolar endeksi — artış = USD güçleniyor = risk-off
-      VIXCLS:   VIX — artış = risk-off
-      DGS10:    10Y faiz — artış = sıkılaşma = risk-off
-    Host kapalıysa skip."""
-    data, errors = {}, []
-    fred_key = load_key("FRED_API_KEY")
-    for sid in FRED_SERIES:
-        try:
-            vals = (_fred_series_api(sid, fred_key) if fred_key
-                    else _fred_series_csv(sid))
-            if len(vals) < 31:
-                raise ValueError(f"yetersiz seri ({len(vals)} nokta)")
-            data[f"fred_{sid}"] = vals[-1]
-            data[f"fred_{sid}_chg30"] = vals[-1] - vals[-31]
-            if sid == "DTWEXBGS" and vals[-31] != 0:
-                data[f"fred_{sid}_chg30_pct"] = vals[-1] / vals[-31] - 1.0
-        except Exception as e:
-            errors.append(f"fred {sid} erişilemedi: {_safe_err(e)}")
-    return data, errors
+    """Makro rejim serileri: dolar endeksi (DTWEXBGS), VIX (VIXCLS), 10Y (DGS10).
+    30 takvim günü önceki en yakın gözlemle karşılaştırma (~21 iş günü)."""
+    out = {}
+    out["fred_source"] = "api" if load_key("FRED_API_KEY") else "fredgraph.csv"
+    for sid, name in (("DTWEXBGS", "dollar"), ("VIXCLS", "vix"), ("DGS10", "dgs10")):
+        s = _fred_series(sid)
+        out[f"fred_{name}_latest"] = s[-1][1]
+        out[f"fred_{name}_momentum_30d"] = (s[-1][1] - s[-22][1]) / abs(s[-22][1]) \
+            if sid == "DTWEXBGS" else s[-1][1] - s[-22][1]
+        # dolar için göreli değişim, VIX/DGS10 için mutlak puan değişimi
+    return out
 
 
-# ---------------------------------------------------------------- Etherscan
+# ------------------------------------------------------------ CoinMetrics
+def fetch_coinmetrics():
+    """Community API: BTC/ETH aktif adres + tx sayısı (30g) -> ETH/BTC oranı."""
+    out = {}
+    end = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    start = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+    vals = {}
+    for asset in ("btc", "eth"):
+        r = requests.get(
+            f"https://community-api.coinmetrics.io/v4/timeseries/asset-metrics",
+            params={"assets": asset, "metrics": "AdrActCnt,TxCnt",
+                    "start_time": start, "end_time": end,
+                    "frequency": "1d", "page_size": "100"},
+            headers=HEADERS, timeout=TIMEOUT)
+        r.raise_for_status()
+        rows = r.json().get("data", [])
+        addr = [float(x["AdrActCnt"]) for x in rows if x.get("AdrActCnt")]
+        txs = [float(x["TxCnt"]) for x in rows if x.get("TxCnt")]
+        if not addr or not txs:
+            raise ValueError(f"coinmetrics {asset}: boş seri")
+        vals[asset] = (sum(addr) / len(addr), sum(txs) / len(txs))
+    out["eth_btc_addr_ratio"] = vals["eth"][0] / vals["btc"][0]
+    out["eth_btc_tx_ratio"] = vals["eth"][1] / vals["btc"][1]
+    return out
+
+
+# --------------------------------------------------------------- Etherscan
 def fetch_etherscan():
-    """Etherscan v2 (ETHERSCAN_API_KEY): şimdilik sadece ETH total supply
-    (stats/tokensupply, chainid=1). LT supply tarafı hazırlığı — düşük
-    öncelik, bileşen bağlı değil; metrics_raw'a gider. Key yoksa/host
-    kapalıysa skip."""
-    data, errors = {}, []
+    """v2 API: ETH toplam arzı (stats/tokensupply). Düşük öncelikli besleme
+    metriği — bileşen bağlı değil, metrics_raw'a gider. Key yoksa atlanır."""
     key = load_key("ETHERSCAN_API_KEY")
     if not key:
-        errors.append("etherscan: ETHERSCAN_API_KEY yok — atlandı")
-        return data, errors
-    try:
-        j = _get("https://api.etherscan.io/v2/api", params={
-            "chainid": "1", "module": "stats", "action": "tokensupply",
-            "apikey": key}, timeout=TIMEOUT)
-        if j.get("status") != "1":
-            raise ValueError(f"API status={j.get('status')}: {j.get('message')}")
-        # Wei cinsinden string -> ETH
-        data["eth_total_supply"] = float(j["result"]) / 1e18
-    except Exception as e:
-        errors.append(f"etherscan tokensupply erişilemedi: {_safe_err(e)}")
-    return data, errors
+        raise ValueError("ETHERSCAN_API_KEY yok")
+    r = requests.get("https://api.etherscan.io/v2/api",
+                     params={"chainid": "1", "module": "stats",
+                             "action": "tokensupply", "apikey": key},
+                     headers=HEADERS, timeout=TIMEOUT)
+    r.raise_for_status()
+    j = r.json()
+    if str(j.get("status")) != "1":
+        raise ValueError(f"etherscan: {j.get('message')} {j.get('result')}")
+    return {"eth_total_supply": float(j["result"]) / 1e18}
+
+
+# ------------------------------------------------------- CoinGecko (geniş)
+def fetch_coingecko_market():
+    """/global (BTC dominansı) + /coins/markets top100'den en iyi/en kötü 5
+    24s performans. Alt rejim hazırlığı — metrics_raw'a gider."""
+    out = {}
+    headers = dict(HEADERS)
+    cg_key = load_key("COINGECKO_API_KEY")
+    if cg_key:
+        headers["x-cg-demo-api-key"] = cg_key
+    r = requests.get("https://api.coingecko.com/api/v3/global",
+                     headers=headers, timeout=TIMEOUT)
+    r.raise_for_status()
+    out["btc_dominance"] = float(
+        r.json()["data"]["market_cap_percentage"].get("btc", 0.0))
+    r = requests.get(
+        "https://api.coingecko.com/api/v3/coins/markets",
+        params={"vs_currency": "usd", "order": "market_cap_desc",
+                "per_page": "100", "page": "1", "price_change_percentage": "24h"},
+        headers=headers, timeout=TIMEOUT)
+    r.raise_for_status()
+    rows = [(c["symbol"].upper(),
+             float(c.get("price_change_percentage_24h_in_currency") or 0.0))
+            for c in r.json()]
+    rows.sort(key=lambda t: t[1], reverse=True)
+    out["top_performers"] = rows[:5]
+    out["worst_performers"] = rows[-5:][::-1]
+    return out
+
+
+# ----------------------------------------------------------- OKX spot/perp
+def fetch_okx_spot_perp():
+    """AVAX spot (AVAX-USDT) ile perp (AVAX-USDT-SWAP) fiyat farkı (primi)."""
+    spot = float(_okx_get("/api/v5/market/ticker", {"instId": "AVAX-USDT"})[0]["last"])
+    swap = float(_okx_get("/api/v5/market/ticker", {"instId": "AVAX-USDT-SWAP"})[0]["last"])
+    return {"avax_spot_price": spot, "avax_swap_price": swap,
+            "okx_spot_perp_gap": (swap - spot) / spot if spot else None}
+
+
+# ----------------------------------------------------------------- orchestrator
+def fetch_all():
+    """Tüm ücretsiz kaynakları sırayla çağırır; her biri izole try/except."""
+    data, errors = {}, {}
+
+    sources = (
+        ("coingecko", fetch_coingecko),
+        ("okx", fetch_okx),
+        ("defillama", fetch_defillama),
+        ("bgeometrics", fetch_bgeometrics),
+        ("fear_greed", fetch_fear_greed),
+        ("mempool_hashrate", fetch_mempool_hashrate),
+        ("binance_taker", fetch_binance_taker),
+        ("fred", fetch_fred),
+        ("coinmetrics", fetch_coinmetrics),
+        ("okx_spot_perp", fetch_okx_spot_perp),
+        ("coingecko_market", fetch_coingecko_market),
+        ("etherscan", fetch_etherscan),
+    )
+    for name, fn in sources:
+        try:
+            data.update(fn())
+            print(f"  [fetch] {name}: OK")
+        except Exception as e:  # noqa: BLE001 — kaynak izolasyonu kasıtlı
+            errors[name] = f"{name} başarısız: {type(e).__name__}: {_safe_err(e)}"
+            print(f"  [fetch] {name}: HATA ({type(e).__name__})")
+
+    # 24s fiyat momentumu (BTC/ETH/AVAX ortalaması)
+    changes = [data.get(k) for k in ("btc_24h_change", "eth_24h_change", "avax_24h_change")]
+    changes = [c for c in changes if c is not None]
+    if changes:
+        data["price_momentum_24h"] = sum(changes) / len(changes)
+
+    # OI 24s değişimi: cache üzerinden
+    if data.get("avax_oi_contracts") is not None:
+        cache_path = Path(__file__).resolve().parent.parent / "data" / "oi_cache.json"
+        try:
+            data["avax_oi_change_24h"] = _oi_change_with_cache(
+                cache_path, data["avax_oi_contracts"])
+        except Exception as e:  # noqa: BLE001
+            errors["oi_cache"] = f"oi_cache başarısız: {type(e).__name__}: {_safe_err(e)}"
+
+    return data, list(errors.values())
+
+
+def _oi_change_with_cache(cache_path, current_oi):
+    """Cache'e (timestamp, oi) ekler; 20-28s arası eski kayda göre değişim
+    döndürür. Uygun eski kayıt yoksa None (bileşen düşer)."""
+    import json
+
+    now = datetime.now(timezone.utc)
+    hist = []
+    if cache_path.exists():
+        try:
+            hist = json.loads(cache_path.read_text(encoding="utf-8")).get("history", [])
+        except (OSError, json.JSONDecodeError):
+            hist = []
+    prev = None
+    for rec in hist:
+        try:
+            ts = datetime.fromisoformat(rec["ts"])
+        except (KeyError, ValueError):
+            continue
+        age_h = (now - ts).total_seconds() / 3600.0
+        if 20.0 <= age_h <= 28.0:
+            prev = float(rec["oi"])
+            break
+    hist.append({"ts": now.isoformat(timespec="seconds"), "oi": current_oi})
+    hist = hist[-200:]
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps({"history": hist}, ensure_ascii=False),
+                          encoding="utf-8")
+    if prev and prev > 0:
+        return current_oi / prev - 1.0
+    return None
