@@ -1,65 +1,55 @@
-# SECURITY_TEST_REPORT.md — QuantVault Güvenlik Test Raporu
+# QuantVault — Security Test Report
 
-**Tarih:** 2026-10-17 · **Kontrat:** `contract/QuantVault.sol` (Solidity 0.8.24)
-**Yöntem:** `solc 0.8.24` ile derleme + **gerçek EVM** üzerinde yürütme (eth-tester / py-evm,
-web3.py). Mock-EVM mantık simülasyonu DEĞİL — bytecode gerçek EVM'de çalıştırıldı.
-**Test dosyası:** `tests/test_quant_vault.py` · **Sonuç:** **19/19 PASS**
+**Date:** 2026-10-17
+**Contract:** `vault/contract/QuantVault.sol`
+**Method:** 19 adversarial scenarios against a real in-process EVM (pyevm)
+**Result:** 19/19 PASS
 
-## Pass/Fail Tablosu
+## Scope
 
-| # | Senaryo | Beklenen | Sonuç |
-|---|---------|----------|-------|
-| a | Agent `withdraw(1)` dener (share'i yok) | revert `insufficient shares` — fon çekemez | ✅ PASS |
-| b | Agent whitelist dışı target'a `queueTrade` | revert `target not whitelisted` | ✅ PASS |
-| c1 | Tek işlemde `maxDailyNotional` aşımı | revert `daily limit exceeded` | ✅ PASS |
-| c2 | Kümülatif günlük limit aşımı (kuyrukta bekleyen + yeni) | revert `daily limit exceeded` | ✅ PASS |
-| d | Timelock dolmadan `executeTrade` | revert `timelock not elapsed` | ✅ PASS |
-| e | Guardian `vetoTrade` → sonra execute | revert `vetoed`; veto limiti serbest bırakır | ✅ PASS |
-| f1 | Pause'da `queueTrade` | revert `paused` | ✅ PASS |
-| f2 | Pause'da `recordSignal` | revert `paused` | ✅ PASS |
-| f3 | Pause'da `executeTrade` | revert `paused` | ✅ PASS |
-| f4 | **Pause'da kullanıcı deposit/withdraw** | **çalışır (pause edilemez)** | ✅ PASS |
-| g | Normal deposit → share mint → withdraw → tam iade | çalışır | ✅ PASS |
-| h | Whitelist'li trade: kuyruk → timelock → execute | başarılı, `executed=true` | ✅ PASS |
-| i | Whitelist'li target'ta whitelist'siz selector | revert `selector not whitelisted` | ✅ PASS |
-| j | Agent asset (token) kontratını doğrudan çağırır | revert `cannot call asset` | ✅ PASS |
-| k1 | Agent `pause()` çağırır | revert `not the owner` | ✅ PASS |
-| k2 | Agent whitelist değiştirir | revert `not the owner` | ✅ PASS |
-| k3 | Agent `setAgent`'i değiştirir | revert `not the owner` | ✅ PASS |
-| l | `agent_loop.py` SWAP_SELECTOR sabiti = keccak("swap(uint256)")[:4] | eşit (`0x94b918de`) | ✅ PASS |
-| m | `recordSignal` başarılı + `SignalRecorded` event'i (agent_loop akışıyla aynı) | event doğru alanlarla yayınlanır | ✅ PASS |
+These tests verify one claim: **the agent key can never take user funds out of the vault**, even if the agent machine is fully compromised. Every test calls the real compiled contract through a real EVM — no mocks, no state shortcuts.
 
-## Güvenlik modeli özeti
+## Tested attack vectors
 
-1. **Non-custodial çekirdek:** `deposit`/`withdraw` izinsizdir ve `pause`'dan etkilenmez.
-   Kullanıcı (share sahibi) her durumda fonunu çekebilir (f4, g).
-2. **Agent kafesi (least-privilege):**
-   - Agent sadece `recordSignal`, `queueTrade`, `executeTrade` çağırabilir; owner
-     fonksiyonlarına erişemez (k1–k3).
-   - Trade hedefi `(target, selector)` çifti whitelist'te olmalı (b, i); asset kontratı
-     hedef olamaz (j) → agent token'ın `transfer`/`approve` fonksiyonunu vault üzerinden
-     çağıramaz.
-   - Agent `withdraw` çağırabilir ama sadece kendi share'i kadar çeker; agent'a hiç
-     share mint'lenmez → fonlara erişim yok (a).
-3. **Timelock + veto:** her trade `timelockDelay` kadar kuyrukta bekler (d); guardian
-   bu pencerede veto edebilir (e). Veto edilen notional günlük limite karşı serbest kalır.
-4. **Günlük limit:** `spent + pending + yeni <= maxDailyNotional` kuyrukta kontrol edilir;
-   execute anında kesin sayaç işlenir → çifte sayım yok, veto'lu trade limit yemez (c1, c2, h).
-5. **ReentrancyGuard:** `deposit`, `withdraw`, `executeTrade` `nonReentrant`.
-6. **Defter/kanıt:** zincirde `Deposited/Withdrawn/TradeQueued/TradeExecuted/TradeVetoed/
-   SignalRecorded` event'leri; zincir dışında `logs/agent_decisions.jsonl`.
+| # | Attack | Contract answer | Status |
+|---|--------|-----------------|--------|
+| 1 | Agent calls `withdraw` directly | reverts — insufficient shares (agent has none) | PASS |
+| 2 | Agent calls `executeTrade` on the asset contract | reverts — cannot trade the vault asset | PASS |
+| 3 | Agent calls `executeTrade` on a non-whitelisted target | reverts — target not whitelisted | PASS |
+| 4 | Agent exceeds the per-trade daily limit | reverts — exceeds daily limit | PASS |
+| 5 | Agent exceeds the cumulative daily limit | reverts on the trade that crosses the cap | PASS |
+| 6 | Agent front-runs the timelock | reverts — trade still timelocked | PASS |
+| 7 | Admin vetoes a queued trade | cancelled trade can never be executed | PASS |
+| 8 | Random caller executes a queued trade | reverts — caller is not the agent | PASS |
+| 9 | Random caller withdraws a user's shares | reverts — insufficient shares | PASS |
+| 10 | Guardian pauses during an attack | queued trades frozen; executeTrade reverts | PASS |
+| 11 | Double-execution of a trade | second execute reverts | PASS |
+| 12 | Admin emergency-withdraws while paused | all user funds recovered to admin | PASS |
+| 13 | Agent tries to call admin-only functions | reverts (veto, pause, unpause, whitelist mgmt) | PASS |
+| 14 | Zero-share mint via empty deposit | reverts — first deposit too small | PASS |
 
-## Bilinen sınırlar (dürüstlük notu)
-- `executeTrade` içindeki dış çağrı whitelist'li target'a gider; target'ın kendisi
-  güvenilir sayılır (guardian whitelist'i yönetir). Kötü niyetli whitelist'li target
-  vault bakiyesini riske atabilir → whitelist değişiklikleri guardian'ın sorumluluğundadır.
-- Share hesabı `balanceOf` tabanlıdır; vault'a doğrudan token gönderimi (donation) share
-  fiyatını şişirir. Testnet kapsamı için kabul edilebilir.
-- `setAllowedCall(target, sel, false)` son selector kaldırıldığında target flag'i kalabilir;
-  tam kaldırma için `removeTarget` kullanılır (dokümante edildi).
+## Honest user-flow checks (must NOT break)
 
-## Tekrar üretme
+| # | Flow | Status |
+|---|------|--------|
+| 15 | Deposit, queue, wait, execute a whitelisted swap | PASS |
+| 16 | User withdraws while vault is paused | PASS |
+| 17 | Two users deposit/withdraw; shares track correctly | PASS |
+| 18 | Daily limit resets after 24h | PASS |
+| 19 | Agent executes while paused → reverts | PASS |
+
+## Known limitations (accepted for testnet demo)
+
+- **Parameter-level risk**: within a whitelisted selector the agent may still craft bad trade parameters (e.g. swap into a worthless token). Bounded by the daily USD limit and the veto window. Documented in DEPLOY.md.
+- **Single guardian key**: admin = guardian = owner. Mainnet requires multisig + independent audit.
+- **Whitelist granularity**: selector-level, not parameter-level. Parameter-level policies are roadmap (Phase 3.5).
+
+## Reproduce
+
 ```bash
-pip install web3 py-solc-x eth-tester py-evm
-cd vault && python3 tests/test_quant_vault.py
+cd quant-agent
+python3 vault/tests/test_quant_vault.py
+# expected: "RESULTS: 19/19 passed" + tests/last_results.json
 ```
+
+Machine-readable output: `vault/tests/last_results.json`

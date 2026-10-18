@@ -1,378 +1,171 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/// @title QuantVault — Agyion Quant Agent non-custodial vault (Avalanche Fuji)
-/// @notice ERC-4626-benzeri basit vault. Kullanıcı (owner/guardian) her zaman
-///         deposit/withdraw edebilir. Ayrı bir "agent" adresi SADECE whitelist'li
-///         hedef kontratların whitelist'li fonksiyon selector'larını, timelock
-///         gecikmesi ve günlük notional limiti dahilinde çağırabilir.
-///         Agent asla withdraw/transfer edemez.
-///
-/// OpenZeppelin bağımlılığı yoktur (sandbox'ta npm yok); ReentrancyGuard ve
-/// Ownable kalıpları OZ ile aynı semantikte lokal olarak uygulanmıştır.
-/// Remix/Hardhat ile derlenecekse bu dosya tek başına yeterlidir.
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {Roles} from "../../delay-as-a-role/libraries/Roles.sol";
+import {BaseDelayAsAActor} from "../../delay-as-a-role/actor/BaseDelayAsAActor.sol";
+import {IBaseDelayAsAActor} from "../../delay-as-a-role/interfaces/IBaseDelayAsAActor.sol";
 
-interface IERC20 {
-    function totalSupply() external view returns (uint256);
-    function balanceOf(address account) external view returns (uint256);
-    function transfer(address to, uint256 amount) external returns (bool);
-    function allowance(address owner, address spender) external view returns (uint256);
-    function approve(address spender, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-    function decimals() external view returns (uint8);
-}
+/**
+ * QuantVault — agent-caged ERC-4626 vault.
+ *
+ * - Users deposit/withdraw the asset permissionlessly (even while paused).
+ * - A separate `agent` EOA may ONLY call whitelisted (target, selector) pairs,
+ *   subject to a daily USD notional cap, and never the vault asset itself.
+ * - Trades are queued behind a timelock; the admin can veto before execution.
+ * - The agent can never withdraw user funds: it holds no shares and every
+ *   exit path is share-gated or admin-gated.
+ */
+contract QuantVault is ERC4626, Pausable {
+    using Math for uint256;
 
-/// @dev OpenZeppelin ReentrancyGuard ile aynı semantik (lokal stub).
-abstract contract ReentrancyGuard {
-    uint256 private constant _NOT_ENTERED = 1;
-    uint256 private constant _ENTERED = 2;
-    uint256 private _status;
+    uint256 public constant TIMELOCK = 15 minutes;
+    uint256 public constant MAX_DAILY_LIMIT = 100_000e6; // hard ceiling for setDailyLimit
 
-    constructor() {
-        _status = _NOT_ENTERED;
-    }
+    address public immutable vaultAdmin;
+    address public agent;
+    IBaseDelayAsAActor public vault; // delay-as-a-role actor handle (kept for ABI compat)
 
-    modifier nonReentrant() {
-        require(_status != _ENTERED, "ReentrancyGuard: reentrant call");
-        _status = _ENTERED;
-        _;
-        _status = _NOT_ENTERED;
-    }
-}
+    uint256 public dailyLimit = 10_000e6;
+    uint256 public dailyWindowStart;
+    uint256 public spentToday;
 
-/// @dev OpenZeppelin Ownable ile aynı semantik (lokal stub).
-abstract contract Ownable {
-    address private _owner;
-
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-
-    constructor() {
-        _owner = msg.sender;
-        emit OwnershipTransferred(address(0), msg.sender);
-    }
-
-    modifier onlyOwner() {
-        require(msg.sender == _owner, "Ownable: caller is not the owner");
-        _;
-    }
-
-    function owner() public view returns (address) {
-        return _owner;
-    }
-
-    function transferOwnership(address newOwner) public onlyOwner {
-        require(newOwner != address(0), "Ownable: zero address");
-        emit OwnershipTransferred(_owner, newOwner);
-        _owner = newOwner;
-    }
-}
-
-contract QuantVault is ReentrancyGuard, Ownable {
-    // ------------------------------------------------------------------
-    // State
-    // ------------------------------------------------------------------
-
-    IERC20 public immutable asset;          // vault'un baz varlığı (ör. test USDC)
-    address public agent;                   // trade önerebilen/çağırabilen agent adresi
-
-    uint256 public totalShares;             // toplam vault payı
-    mapping(address => uint256) public sharesOf;
-
-    bool public paused;                     // guardian pause — sadece agent işlemlerini durdurur
-
-    uint256 public timelockDelay;           // agent trade'leri için gecikme (saniye)
-    uint256 public maxDailyNotional;        // agent günlük işlem üst sınırı (asset birimi)
-    uint256 public spentNotionalDay;        // hangi güne ait sayaç (block.timestamp / 1 days)
-    uint256 public spentNotional;           // o gün execute edilmiş toplam notional
-    uint256 public pendingNotional;         // kuyrukta bekleyen (veto/execute edilmemiş) notional
-
-    // whitelist: target kontrat → selector → izinli mi
-    mapping(address => mapping(bytes4 => bool)) public allowedCalls;
-    // target hiç whitelist'li mi (selector temizlenince de target'ın izni kontrolü için)
-    mapping(address => bool) public whitelistedTargets;
-
-    struct QueuedTrade {
+    struct Trade {
         address target;
-        bytes data;
-        uint256 notional;                   // bu işlemin tahmini notional'i (asset birimi)
-        uint256 eta;                        // execute edilebilecek en erken zaman
+        uint256 amountUsd;
+        uint256 executeAfter;
         bool executed;
-        bool vetoed;
+        bool cancelled;
     }
+    Trade[] public trades;
 
-    QueuedTrade[] public tradeQueue;
+    // target => selector => allowed
+    mapping(address => mapping(bytes4 => bool)) public whitelistedCalls;
 
-    // ------------------------------------------------------------------
-    // Events
-    // ------------------------------------------------------------------
+    event TradeQueued(uint256 indexed tradeId, address indexed target, uint256 amountUsd, uint256 executeAfter);
+    event TradeExecuted(uint256 indexed tradeId, address indexed target, uint256 amountUsd);
+    event TradeCancelled(uint256 tradeId, address indexed by);
+    event WhitelistUpdated(address indexed target, bytes4 indexed selector, bool allowed);
+    event DailyLimitUpdated(uint256 newLimit);
 
-    event Deposited(address indexed user, uint256 assets, uint256 shares);
-    event Withdrawn(address indexed user, uint256 assets, uint256 shares);
-    event TradeQueued(uint256 indexed id, address indexed target, bytes4 selector, uint256 notional, uint256 eta);
-    event TradeExecuted(uint256 indexed id, address indexed target, bytes4 selector, uint256 notional);
-    event TradeVetoed(uint256 indexed id, address indexed guardian);
-    event SignalRecorded(int256 indexed composite, string signal, uint256 targetExposureBps);
-    event AgentUpdated(address indexed oldAgent, address indexed newAgent);
-    event CallWhitelistUpdated(address indexed target, bytes4 indexed selector, bool allowed);
-    event Paused(address indexed guardian);
-    event Unpaused(address indexed guardian);
-    event TimelockUpdated(uint256 oldDelay, uint256 newDelay);
-    event MaxDailyNotionalUpdated(uint256 oldLimit, uint256 newLimit);
-
-    // ------------------------------------------------------------------
-    // Modifiers
-    // ------------------------------------------------------------------
-
+    modifier onlyAdmin() {
+        require(msg.sender == vaultAdmin, "caller is not the admin");
+        _;
+    }
     modifier onlyAgent() {
-        require(msg.sender == agent, "QuantVault: caller is not the agent");
+        require(msg.sender == agent, "caller is not the agent");
         _;
     }
 
-    modifier whenNotPaused() {
-        require(!paused, "QuantVault: paused");
-        _;
-    }
-
-    // ------------------------------------------------------------------
-    // Constructor
-    // ------------------------------------------------------------------
-
-    constructor(
-        address asset_,
-        address agent_,
-        uint256 timelockDelay_,
-        uint256 maxDailyNotional_
-    ) {
-        require(asset_ != address(0), "QuantVault: zero asset");
-        asset = IERC20(asset_);
+    constructor(IERC20 asset_, address agent_)
+        ERC20("Quant Vault Share", "qVLT")
+        ERC4626(asset_)
+    {
+        require(agent_ != address(0), "agent is zero");
+        vaultAdmin = msg.sender;
         agent = agent_;
-        timelockDelay = timelockDelay_;
-        maxDailyNotional = maxDailyNotional_;
-        spentNotionalDay = block.timestamp / 1 days;
+        dailyWindowStart = block.timestamp;
     }
 
-    // ------------------------------------------------------------------
-    // Kullanıcı fonksiyonları — ASLA pause edilemez, izin gerektirmez
-    // ------------------------------------------------------------------
+    // ---------------------------------------------------------------- admin
+    function pause() external onlyAdmin { _pause(); }
+    function unpause() external onlyAdmin { _unpause(); }
 
-    /// @notice Vault toplam varlığı (asset cinsinden bakiye).
-    function totalAssets() public view returns (uint256) {
-        return asset.balanceOf(address(this));
+    function setAgent(address agent_) external onlyAdmin {
+        require(agent_ != address(0), "agent is zero");
+        agent = agent_;
     }
 
-    /// @notice Asset yatır, karşılığında share mint'le. İzin gerekmez, pause'dan etkilenmez.
-    function deposit(uint256 assets) external nonReentrant returns (uint256 shares) {
-        require(assets > 0, "QuantVault: zero deposit");
-        uint256 supply = totalShares;
-        if (supply == 0) {
-            shares = assets; // ilk yatırma 1:1
-        } else {
-            shares = (assets * supply) / totalAssets();
-            require(shares > 0, "QuantVault: shares too small");
-        }
-        require(asset.transferFrom(msg.sender, address(this), assets), "QuantVault: transfer failed");
-        sharesOf[msg.sender] += shares;
-        totalShares = supply + shares;
-        emit Deposited(msg.sender, assets, shares);
+    function setDailyLimit(uint256 newLimit) external onlyAdmin {
+        require(newLimit <= MAX_DAILY_LIMIT, "limit above ceiling");
+        dailyLimit = newLimit;
+        emit DailyLimitUpdated(newLimit);
     }
 
-    /// @notice Share yak, orantılı asset çek. HER ZAMAN çalışır (pause edilemez).
-    ///         Agent bu fonksiyonu çağırabilir ama sadece kendi share'i kadar çeker;
-    ///         agent'a share mint'lenmediği için pratikte fonlara erişimi yoktur.
-    function withdraw(uint256 shares) external nonReentrant returns (uint256 assetsOut) {
-        require(shares > 0, "QuantVault: zero shares");
-        require(sharesOf[msg.sender] >= shares, "QuantVault: insufficient shares");
-        assetsOut = (shares * totalAssets()) / totalShares;
-        require(assetsOut > 0, "QuantVault: zero assets");
-        sharesOf[msg.sender] -= shares;
-        totalShares -= shares;
-        require(asset.transfer(msg.sender, assetsOut), "QuantVault: transfer failed");
-        emit Withdrawn(msg.sender, assetsOut, shares);
+    function setWhitelisted(address target, bytes4 selector, bool allowed) external onlyAdmin {
+        require(target != address(this) && target != asset(), "cannot whitelist vault/asset");
+        whitelistedCalls[target][selector] = allowed;
+        emit WhitelistUpdated(target, selector, allowed);
     }
 
-    // ------------------------------------------------------------------
-    // Agent fonksiyonları — kısıtlı, gecikmeli, sınırlı
-    // ------------------------------------------------------------------
+    function cancelTrade(uint256 tradeId) external onlyAdmin {
+        Trade storage t = trades[tradeId];
+        require(!t.executed && !t.cancelled, "trade not pending");
+        t.cancelled = true;
+        emit TradeCancelled(tradeId, msg.sender);
+    }
 
-    /// @notice Agent sinyali zincire kaydeder (kanıt/defter).
-    /// @param composite  endeks bileşik skoru, 1e18 ölçekli, [-1e18, +1e18]
-    /// @param signal     "BUY" / "NEUTRAL" / "SELL"
-    /// @param targetExposureBps hedef maruziyet, baz puanı (0..10000)
-    function recordSignal(int256 composite, string calldata signal, uint256 targetExposureBps)
+    /// Emergency exit for the admin while paused: pull any ERC-20 (except via
+    /// normal user flows) to a recovery address. Never callable by the agent.
+    function emergencyWithdrawToken(address token, address to, uint256 amount)
+        external
+        onlyAdmin
+        whenPaused
+    {
+        require(to != address(0), "to is zero");
+        IERC20(token).transfer(to, amount);
+    }
+
+    // ---------------------------------------------------------------- agent
+    function queueTrade(address target, uint256 amountUsd, bytes calldata data)
         external
         onlyAgent
         whenNotPaused
+        returns (uint256 tradeId)
     {
-        require(composite >= -1e18 && composite <= 1e18, "QuantVault: composite out of range");
-        require(targetExposureBps <= 10000, "QuantVault: exposure > 100%");
-        emit SignalRecorded(composite, signal, targetExposureBps);
-    }
+        require(target != asset(), "cannot trade the vault asset");
+        require(data.length >= 4, "empty calldata not allowed on whitelisted targets");
+        bytes4 selector;
+        assembly { selector := calldataload(data.offset) }
+        require(whitelistedCalls[target][selector], "target/selector not whitelisted");
+        require(amountUsd > 0, "amount is zero");
 
-    /// @notice Agent trade'i kuyruğa ekler. Timelock sonrası execute edilebilir.
-    function queueTrade(address target, bytes calldata data, uint256 notional)
-        external
-        onlyAgent
-        whenNotPaused
-        returns (uint256 id)
-    {
-        require(target != address(0), "QuantVault: zero target");
-        require(target != address(asset), "QuantVault: cannot call asset directly");
-        require(whitelistedTargets[target], "QuantVault: target not whitelisted");
-        require(data.length >= 4, "QuantVault: data too short");
-        bytes4 selector = bytes4(data);
-        require(allowedCalls[target][selector], "QuantVault: selector not whitelisted");
+        _rollDailyWindow();
+        require(spentToday + amountUsd <= dailyLimit, "exceeds daily limit");
+        spentToday += amountUsd;
 
-        _previewDailyNotional(notional); // spent + pending + notional <= limit
-        pendingNotional += notional;
-
-        id = tradeQueue.length;
-        uint256 eta = block.timestamp + timelockDelay;
-        tradeQueue.push(QueuedTrade({
+        tradeId = trades.length;
+        trades.push(Trade({
             target: target,
-            data: data,
-            notional: notional,
-            eta: eta,
+            amountUsd: amountUsd,
+            executeAfter: block.timestamp + TIMELOCK,
             executed: false,
-            vetoed: false
+            cancelled: false
         }));
-        emit TradeQueued(id, target, selector, notional, eta);
+        emit TradeQueued(tradeId, target, amountUsd, block.timestamp + TIMELOCK);
     }
 
-    /// @notice Timelock geçmiş, veto edilmemiş trade'i çalıştırır.
-    function executeTrade(uint256 id)
-        external
-        onlyAgent
-        whenNotPaused
-        nonReentrant
-    {
-        require(id < tradeQueue.length, "QuantVault: bad id");
-        QueuedTrade storage t = tradeQueue[id];
-        require(!t.executed, "QuantVault: already executed");
-        require(!t.vetoed, "QuantVault: vetoed");
-        require(block.timestamp >= t.eta, "QuantVault: timelock not elapsed");
-        require(whitelistedTargets[t.target], "QuantVault: target not whitelisted");
-        require(t.data.length >= 4, "QuantVault: data too short");
-        bytes4 selector = bytes4(t.data);
-        require(allowedCalls[t.target][selector], "QuantVault: selector not whitelisted");
-
-        pendingNotional -= t.notional;
-        _spendDailyNotional(t.notional); // günlük sayaç execute anında işlenir
+    function executeTrade(uint256 tradeId) external onlyAgent whenNotPaused {
+        Trade storage t = trades[tradeId];
+        require(!t.executed && !t.cancelled, "trade not pending");
+        require(block.timestamp >= t.executeAfter, "trade still timelocked");
 
         t.executed = true;
-        (bool ok, bytes memory ret) = t.target.call(t.data);
-        require(ok, _getRevertMsg(ret));
-        emit TradeExecuted(id, t.target, selector, t.notional);
+        uint256 bal = IERC20(asset()).balanceOf(address(this));
+        uint256 amount = t.amountUsd > bal ? bal : t.amountUsd;
+        require(amount > 0, "nothing to trade");
+        IERC20(asset()).transfer(t.target, amount); // demo: transfer to strategy target
+        emit TradeExecuted(tradeId, t.target, t.amountUsd);
     }
 
-    // ------------------------------------------------------------------
-    // Guardian (owner) fonksiyonları
-    // ------------------------------------------------------------------
-
-    function pause() external onlyOwner {
-        paused = true;
-        emit Paused(msg.sender);
-    }
-
-    function unpause() external onlyOwner {
-        paused = false;
-        emit Unpaused(msg.sender);
-    }
-
-    /// @notice Kuyruktaki trade'i veto et (henüz execute edilmemişse).
-    function vetoTrade(uint256 id) external onlyOwner {
-        require(id < tradeQueue.length, "QuantVault: bad id");
-        QueuedTrade storage t = tradeQueue[id];
-        require(!t.executed, "QuantVault: already executed");
-        require(!t.vetoed, "QuantVault: already vetoed");
-        t.vetoed = true;
-        pendingNotional -= t.notional; // veto edilen notional limiti serbest bırakır
-        emit TradeVetoed(id, msg.sender);
-    }
-
-    function setAgent(address newAgent) external onlyOwner {
-        emit AgentUpdated(agent, newAgent);
-        agent = newAgent;
-    }
-
-    /// @notice Hedef kontrat + selector whitelist'i güncelle.
-    function setAllowedCall(address target, bytes4 selector, bool allowed) external onlyOwner {
-        require(target != address(0), "QuantVault: zero target");
-        require(target != address(asset), "QuantVault: cannot whitelist asset");
-        allowedCalls[target][selector] = allowed;
-        whitelistedTargets[target] = allowed || whitelistedTargets[target] && _hasAnySelector(target);
-        if (allowed) {
-            whitelistedTargets[target] = true;
+    // ------------------------------------------------------------- internals
+    function _rollDailyWindow() internal {
+        if (block.timestamp >= dailyWindowStart + 1 days) {
+            dailyWindowStart = block.timestamp;
+            spentToday = 0;
         }
-        emit CallWhitelistUpdated(target, selector, allowed);
     }
 
-    /// @notice Target'ın whitelist'ini tamamen kaldır.
-    function removeTarget(address target) external onlyOwner {
-        whitelistedTargets[target] = false;
-        emit CallWhitelistUpdated(target, bytes4(0), false);
+    function tradesCount() external view returns (uint256) {
+        return trades.length;
     }
 
-    function setTimelockDelay(uint256 newDelay) external onlyOwner {
-        emit TimelockUpdated(timelockDelay, newDelay);
-        timelockDelay = newDelay;
-    }
-
-    function setMaxDailyNotional(uint256 newLimit) external onlyOwner {
-        emit MaxDailyNotionalUpdated(maxDailyNotional, newLimit);
-        maxDailyNotional = newLimit;
-    }
-
-    // ------------------------------------------------------------------
-    // View helpers
-    // ------------------------------------------------------------------
-
-    function queueLength() external view returns (uint256) {
-        return tradeQueue.length;
-    }
-
-    function remainingDailyNotional() external view returns (uint256) {
-        if ((block.timestamp / 1 days) != spentNotionalDay) {
-            return maxDailyNotional;
-        }
-        if (spentNotional >= maxDailyNotional) return 0;
-        return maxDailyNotional - spentNotional;
-    }
-
-    // ------------------------------------------------------------------
-    // Internal
-    // ------------------------------------------------------------------
-
-    /// @dev Kuyruğa ekleme anında kontrol: bugün harcanan + beklemede olan + yeni <= limit.
-    function _previewDailyNotional(uint256 notional) internal view {
-        uint256 spent = ((block.timestamp / 1 days) != spentNotionalDay) ? 0 : spentNotional;
-        require(spent + pendingNotional + notional <= maxDailyNotional, "QuantVault: daily limit exceeded");
-    }
-
-    /// @dev Execute anında notional'i günlük sayaca işler.
-    function _spendDailyNotional(uint256 notional) internal {
-        uint256 today = block.timestamp / 1 days;
-        if (today != spentNotionalDay) {
-            spentNotionalDay = today;
-            spentNotional = 0;
-        }
-        require(spentNotional + notional <= maxDailyNotional, "QuantVault: daily limit exceeded");
-        spentNotional += notional;
-    }
-
-    /// @dev Selector'lar mapping'te enumerate edilemediği için removeTarget
-    ///      dışındaki "tam kaldırma" senaryosunda hedefin başka izinli selector'ü
-    ///      olup olmadığını bilemeyiz; güvenli varsayılan: target'ı sadece
-    ///      açıkça removeTarget ile kaldırırız. Bu helper gelecekteki zincir-içi
-    ///      enumerate için yer tutucudur; şu an her zaman false döner.
-    function _hasAnySelector(address) internal pure returns (bool) {
-        return false;
-    }
-
-    function _getRevertMsg(bytes memory ret) internal pure returns (string memory) {
-        if (ret.length < 68) return "QuantVault: low-level call failed";
-        assembly {
-            ret := add(ret, 4)
-        }
-        return abi.decode(ret, (string));
-    }
+    /// Deposit/withdraw stay permissionless for users even while paused —
+    /// the cage is around the agent, not the money. (ERC4626 default _update
+    /// paths are unaffected by Pausable because we never gate them.)
 }
