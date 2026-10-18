@@ -1,41 +1,82 @@
-# OKX ATK — Integration Proof
+# ATK Entegrasyon Kanıtı (Jüri Sayfası)
 
-**Date:** 2026-10-17 · **Track:** OKX · **Runner:** hackathon sandbox (network-restricted)
+**ATK**: OKX Agent Trade Kit — `@okx_ai/okx-trade-mcp` v1.4.8
+(npm, MIT) / GitHub `okx/agent-trade-kit`. MCP (stdio) üzerinden OKX CEX V5
+API'sini açar: 167 tool, 11 modül. Bu projede **gerçek MCP protokolüyle**
+kullanıldı — REST mock'u değil, ATK'nın kendisi spawn edilip `tools/call`
+ile konuşuldu.
 
-## 1. What was connected
+## 1) Kullandığımız ATK tool'ları (modül:tool)
 
-`@okx_ai/okx-trade-mcp` **1.4.8**, spawned as a real subprocess and driven over
-**MCP stdio transport (JSON-RPC)** — not a REST mock, not a replayed capture.
-`AtkBridge` (`atk/atk_bridge.py`) implements initialize → tools/list → tools/call.
+`tools/list` çıktısından doğrulandı (server: `okx-trade-mcp 1.4.8`,
+`--modules market,spot,account` → 50 tool görünür; biz 4'ünü kullanıyoruz):
 
-## 2. Evidence
+| Modül   | Tool                    | OKX V5 endpoint                | Kullanım |
+|---------|-------------------------|--------------------------------|----------|
+| market  | `market_get_ticker`     | `GET /api/v5/market/ticker`    | BTC-USDT son fiyat — engine sinyalinin fiyat doğrulaması |
+| spot    | `spot_place_order`      | `POST /api/v5/trade/order`     | Demo market emir (composite > +0.5 → buy, < -0.5 → sell) |
+| account | `account_get_positions` | `GET /api/v5/account/positions`| Pozisyon teyidi |
+| account | `account_get_balance`   | `GET /api/v5/account/balance`  | Demo bakiye kontrolü |
 
-- **50 tools enumerated live** over MCP (`tools/list`). Modules: `market`, `spot`,
-  `account` (per server banner). Server banner: `okx-trade-mcp 1.4.8`.
-- **Live market data over MCP**: `market_get_ticker` returned BTC-USDT last price
-  **81,479.2** at 14:18 UTC.
-- **Independent cross-check**: engine's CryptoQuant feed read BTC **81,506.0** at the
-  same minute → deviation **0.033%** (tolerance 2%). Same asset, same minute,
-  two independent sources.
-- **Fail-closed auth**: without API keys, authenticated calls
-  (`account_get_balance`, `account_get_positions`) returned `AUTH_MISSING`
-  and produced no fabricated data. `spot_place_order` was validated as a signed
-  intent only; no live order was placed (keyless sandbox).
-- **Transport truthfulness**: every log record carries `transport` ∈
-  {`mcp`, `rest-sim`, `mock`}. Records marked `simulated:true` were never mixed
-  with live ones in the demo log.
+Input şemaları ATK'dan canlı okundu, ör. `spot_place_order`:
+`{instId, tdMode: cash|cross|isolated, side: buy|sell, ordType: market|limit|...,
+sz, tgtCcy: base_ccy|quote_ccy, clOrdId, px?}`.
 
-## 3. Raw logs
+## 2) Akış diyagramı
 
-- `atk/logs/decisions.jsonl` — JSON-RPC transcripts (request/response) per call
-- `atk/demo_log.json` — human-readable demo run summary
-- `atk/signal_to_trade.py` — the policy → trade plan mapping used in the demo
+```
+engine (Python)                         atk/ (bu modül)                     OKX
+─────────────────                       ──────────────────                  ─────────
+fetchers + normalize
+      │
+      ▼
+data/snapshot.json ──okur──► signal_to_trade.py
+ {composite, signal,             │ composite > +0.5 → BUY planı
+  components[24]}                │ composite < -0.5 → SELL planı
+                                 │ aksi → NÖTR (emir yok)
+                                 ▼
+                          atk_bridge.AtkBridge
+                                 │ spawn: npx @okx_ai/okx-trade-mcp
+                                 │        --profile demo --modules market,spot,account
+                                 ▼  JSON-RPC (MCP stdio)
+                          tools/call market_get_ticker ──────────► GET /api/v5/market/ticker (GERÇEK ✅)
+                          tools/call spot_place_order ───────────► POST /api/v5/trade/order (demo profili)
+                          tools/call account_get_positions ──────► GET /api/v5/account/positions
+                                 │
+                                 ▼
+                    demo_log.json + logs/decisions.jsonl
+                    (imza, beklenen yanıt, gerçek yanıt)
+```
 
-## 4. Honest boundaries
+Fallback zinciri: MCP → OKX V5 REST (HMAC, `x-simulated-trading: 1`) →
+mock (ağ kapalıysa, `simulated: true`). Sandbox'ta OKX REST doğrudan kapalıydı
+fakat ATK'nın kendi HTTP katmanı (undici) üzerinden market verisi **gerçek**
+döndü — transport her kayıtta işaretli.
 
-- Sandbox blocks egress to `www.okx.com`; the REST fallback path (V5 API, HMAC
-  signing, `x-simulated-trading: 1`) is implemented and tested but was exercised
-  against the demo trading flag, not production keys.
-- No funds moved on OKX during the demo — the CEX leg is a showcase; real
-  execution ran on the Avalanche vault (see `vault/SECURITY_TEST_REPORT.md` and
-  the Fuji E2E tx in the README).
+## 3) Demo log özeti (`demo_log.json`, gerçek koşu 2026-10-17)
+
+| Çağrı | Transport | Sonuç |
+|---|---|---|
+| `market_get_ticker BTC-USDT` | mcp | ✅ gerçek fiyat: **81,474.9 / 81,479.2 USDT** (2 ayrı koşu) |
+| `spot_place_order buy 10 USDT` | mcp | ⚠️ ATK `AuthenticationError` (anahtarsız sandbox) — beklenen davranış; imza + beklenen başarı yanıtı (`sCode:"0"`, `ordId`) logda |
+| `account_get_positions` | mcp | ⚠️ ATK `AuthenticationError` (AUTH_MISSING) |
+| `account_get_balance` | mcp | ⚠️ ATK `AuthenticationError` (AUTH_MISSING) |
+
+Fiyat çapraz kontrolü (`signal_to_trade.py` çıktısı):
+ATK 81,479.2 vs engine/CryptoQuant 81,506.0 → sapma **%0.033** (tolerans %2) ✅
+
+Sinyal kararı: composite **-0.0052** → NÖTR → emir planlanmadı (kurala uygun);
+BUY/SELL plan üretimi birim testiyle doğrulandı (composite ±0.6/∓0.7 senaryosu).
+
+## 4) Production'a geçiş
+
+```bash
+# OKX demo-trading (paper) anahtarları — https://www.okx.com → Demo Trading → API
+export OKX_API_KEY=... OKX_SECRET_KEY=... OKX_PASSPHRASE=... OKX_DEMO=1
+python3 signal_to_trade.py     # demo emirler gerçek simulated-trading'e düşer
+
+# Canlı: ~/.okx/config.toml [profiles.live] + ATK --profile live
+# (öneri: canlıda önce --read-only ile doğrulama)
+```
+
+Anahtarlar yalnızca env/config'den okunur; repoda secret yok.
